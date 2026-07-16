@@ -1,6 +1,6 @@
 # Select one of the targets to build
-CONFIG_NVMEVIRT_NVM := y
-#CONFIG_NVMEVIRT_SSD := y
+#CONFIG_NVMEVIRT_NVM := y
+CONFIG_NVMEVIRT_SSD := y
 #CONFIG_NVMEVIRT_ZNS := y
 #CONFIG_NVMEVIRT_KV := y
 
