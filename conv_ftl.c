@@ -3,9 +3,21 @@
 #include <linux/vmalloc.h>
 #include <linux/ktime.h>
 #include <linux/sched/clock.h>
+#include <linux/random.h>
+#include <linux/moduleparam.h>
 
 #include "nvmev.h"
 #include "conv_ftl.h"
+
+enum gc_victim_policy {
+	GC_POLICY_GREEDY = 0,
+	GC_POLICY_RANDOM = 1,
+	GC_POLICY_COST_BENEFIT = 2,
+};
+
+static unsigned int gc_policy = GC_POLICY_GREEDY;
+module_param(gc_policy, uint, 0644);
+MODULE_PARM_DESC(gc_policy, "GC victim selection policy: 0=Greedy, 1=Random, 2=Cost-Benefit");
 
 static inline bool last_pg_in_wordline(struct conv_ftl *conv_ftl, struct ppa *ppa)
 {
@@ -657,7 +669,16 @@ static struct line *select_victim_line(struct conv_ftl *conv_ftl, bool force)
 		return NULL;
 	}
 
-	pqueue_pop(lm->victim_line_pq);
+	if (gc_policy == GC_POLICY_RANDOM) {
+		pqueue_t *pq = lm->victim_line_pq;
+		size_t idx = 1 + (get_random_u32() % (pq->size - 1));
+
+		victim_line = pq->d[idx];
+		pqueue_remove(pq, victim_line);
+	} else {
+		pqueue_pop(lm->victim_line_pq);
+	}
+
 	victim_line->pos = 0;
 	lm->victim_line_cnt--;
 
