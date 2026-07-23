@@ -615,17 +615,18 @@ static int NVMeV_init(void)
 
 	__print_base_config();
 
-	nvmev_vdev = VDEV_INIT();
+	nvmev_vdev = VDEV_INIT(); //구조체 만들고 pci.config 잡는 과정
 	if (!nvmev_vdev)
 		return -EINVAL;
 
-	if (!__load_configs(&nvmev_vdev->config)) {
+	if (!__load_configs(&nvmev_vdev->config)) { //할당한 메모리. cpu 등을 변수로 불러와서 저장하는 기능
 		goto ret_err;
 	}
 
-	NVMEV_STORAGE_INIT(nvmev_vdev);
+	NVMEV_STORAGE_INIT(nvmev_vdev); //실제 데이터 저장용 메모리를 매핑해서 진짜 쓸 수 있는 포인터로 만든다. /proc/nvmev/라는 관리용 파일 인터페이스를 만드는 함수
 
-	NVMEV_NAMESPACE_INIT(nvmev_vdev);
+
+	NVMEV_NAMESPACE_INIT(nvmev_vdev); //namespace를 생성하고 conv_init_namespace() -> conv_init_ftl() FTL 자료구조(매핑테이블, victim line 큐, write credit) 생성 + I/O 처리 함수 등록
 
 	if (io_using_dma) {
 		if (ioat_dma_chan_set("dma7chan0") != 0) {
@@ -634,7 +635,7 @@ static int NVMeV_init(void)
 		}
 	}
 
-	if (!NVMEV_PCI_INIT(nvmev_vdev)) {
+	if (!NVMEV_PCI_INIT(nvmev_vdev)) { //PCI 설정 공간에 실제 값(이름표)을 채우고, ② 커널의 PCI 시스템에 이 가상 디바이스를 공식 등록
 		goto ret_err;
 	}
 
