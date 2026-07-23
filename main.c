@@ -311,6 +311,58 @@ static int __get_nr_entries(int dbs_idx, int queue_size)
 	return diff;
 }
 
+enum block_walk_mode { BLOCK_WALK_DUMP, BLOCK_WALK_RESET };
+
+/* Walks every NAND block of every Conventional-FTL namespace/partition.
+ * DUMP prints "ns part ch lun pl blk erase_cnt" per block to m; RESET zeroes erase_cnt.
+ */
+static void __walk_conv_blocks(struct seq_file *m, enum block_walk_mode mode)
+{
+	unsigned int ns_id;
+
+	for (ns_id = 0; ns_id < nvmev_vdev->nr_ns; ns_id++) {
+		struct nvmev_ns *ns = &nvmev_vdev->ns[ns_id];
+		struct conv_ftl *conv_ftls;
+		uint32_t part_id;
+
+		if (NS_SSD_TYPE(ns_id) != SSD_TYPE_CONV)
+			continue;
+
+		conv_ftls = (struct conv_ftl *)ns->ftls;
+
+		for (part_id = 0; part_id < ns->nr_parts; part_id++) {
+			struct ssd *ssd = conv_ftls[part_id].ssd;
+			struct ssdparams *spp = &ssd->sp;
+			int ch, lun, pl, blk_id;
+
+			for (ch = 0; ch < spp->nchs; ch++) {
+				for (lun = 0; lun < spp->luns_per_ch; lun++) {
+					for (pl = 0; pl < spp->pls_per_lun; pl++) {
+						struct nand_plane *plane =
+							&ssd->ch[ch].lun[lun].pl[pl];
+
+						for (blk_id = 0; blk_id < spp->blks_per_pl;
+						     blk_id++) {
+							struct nand_block *blk =
+								&plane->blk[blk_id];
+
+							if (mode == BLOCK_WALK_DUMP)
+								seq_printf(
+									m,
+									"%u %u %d %d %d %d %d\n",
+									ns_id, part_id, ch,
+									lun, pl, blk_id,
+									blk->erase_cnt);
+							else
+								blk->erase_cnt = 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 static int __proc_file_read(struct seq_file *m, void *data)
 {
 	const char *filename = m->private;
@@ -351,7 +403,7 @@ static int __proc_file_read(struct seq_file *m, void *data)
 		seq_printf(m, "total: %u %u %u %llu\n", nr_in_flight, nr_dispatch, nr_dispatched,
 			   total_io);
 	} else if (strcmp(filename, "debug") == 0) {
-		/* Left for later use */
+		__walk_conv_blocks(m, BLOCK_WALK_DUMP);
 	}
 
 	return 0;
@@ -401,7 +453,8 @@ static ssize_t __proc_file_write(struct file *file, const char __user *buf, size
 			memset(&sq->stat, 0x00, sizeof(sq->stat));
 		}
 	} else if (!strcmp(filename, "debug")) {
-		/* Left for later use */
+		if (!strncmp(input, "reset", 5))
+			__walk_conv_blocks(NULL, BLOCK_WALK_RESET);
 	}
 
 out:
