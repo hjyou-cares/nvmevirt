@@ -15,6 +15,7 @@
 - VS Code + Remote-SSH로 VM에 접속해서 작업
 - 실험 서버: 147.46.241.107 (포트 220), NVMeVirt 세팅: memmap_start=12G memmap_size=36G cpus=14,15
 - 저장소: GitHub fork `hjyou-cares/nvmevirt` (upstream: `snu-csl/nvmevirt`)
+- **주의**: 이 fork를 로컬 VM 외에 다른 환경(서버 등)에서도 건드리고 있어서 origin에 로컬에 없는 커밋이 먼저 들어와 있던 적 있음 (2026-07-23, `CONFIG_NVMEVIRT_ZNS` 커밋). 작업 시작 전 `git fetch`/`git pull`로 동기화 확인 습관 들일 것.
 - 빌드: gcc-12, linux-headers. 리로드 사이클: `umount → rmmod → make → insmod → mount(+chown)`
 - GRUB 관련: `memmap=1G\\\$2G` 트리플 백슬래시 이스케이핑, `intremap=off` 필요 (VM 재설정 시 다시 필요할 수 있음)
 
@@ -27,6 +28,8 @@ NVMeVirt의 Conventional FTL(`conv_ftl.c`)에서 GC victim 선택 정책 3가지
 평가: NVMeVirt 가상 SSD에 Filebench/FIO 벤치마크 실행 후, 정책별로 아래 측정:
 - 블록별 Erase 횟수 (`mark_block_free()`의 `blk->erase_cnt++`)
 - 호스트 IO AVG, Tail Latency
+
+**중요**: `erase_cnt`는 현재 커널 모듈 밖으로 노출되는 통로가 전혀 없음 (`/proc/nvmev/stat`엔 큐 통계만 있고 FTL/GC 관련 필드 없음, `printk`/`seq_printf` 등 아무것도 안 걸려있음). `main.c`의 `debug` proc 파일(`__proc_file_read` 353번째 줄 근처, `strcmp(filename, "debug")` 분기)이 지금 비어있어서(`/* Left for later use */`) 여기에 erase_cnt 덤프 기능을 직접 구현해야 측정이 가능함. 이것도 실습 구현 범위에 포함시켜야 함.
 
 ## 코드 구조 요약 (핵심 함수 위치, conv_ftl.c 기준)
 - `victim_line_cmp_pri`, `victim_line_get_pri`, `victim_line_set_pri`, `victim_line_get_pos/set_pos` (68~92줄): pqueue 콜백. `pqueue_init()`(`init_lines()` 안)에 등록됨.
@@ -64,6 +67,7 @@ sudo mkfs -t ext4 /dev/nvme0n1        # 최초 1회만, 기존 데이터 지워�
 sudo mount /dev/nvme0n1 ~/nvme_mount  # insmod 할 때마다 재실행
 sudo chown $USER:$USER ~/nvme_mount   # root 소유로 마운트되므로 필요
 ```
+로컬 VM 기준 실사용 가능 용량은 약 859M (전체 923M 중 ext4 오버헤드 제외, `memmap_size=1G` 설정 기준). 벤치마크 파일 크기 잡을 때 이 한도 고려할 것.
 
 ### 2. fio (apt로 설치 가능)
 ```
@@ -120,23 +124,10 @@ run 5
 - `WARNING! Run stopped early ... could not obtain a file` 메시지가 `finishonbytes` 도달 시에도 뜰 수 있음 — 목표 바이트 도달로 인한 정상 종료일 수 있으니 대상 파일 크기로 실제 실패 여부 확인.
 
 
-2026.07.23
-현재 로컬 VM 상태 확인 결과 정리해드릴게요.
-
-환경 상태
-- nvmev.ko는 있지만 (7/15 빌드) 오늘 리부팅된 이후라 로드 안 된 상태 (lsmod에 없음)
-- main.c는 7/22에 주석만 추가된 상태라 로직상 재빌드해도 동작 차이 없음
-- GRUB에 memmap=1G$2G 설정은 이미 되어 있음 (VM 기준: memmap_start=2G, memmap_size=1G)
-- CPU는 4개 (0-3) — cpus= 파라미터로 최소 2개 지정 필요 (예: cpus=2,3)
-- intremap=off 옵션은 현재 안 걸려있음 (필요해지면 insmod 시 에러로 알 수 있음)
-- fio는 미설치지만 apt로 설치 가능 (fio 3.28-1)
-- filebench는 apt 저장소에 후보 자체가 없음 (Ubuntu 22.04 기본 repo엔 없어서 소스 빌드가 필요할 수 있음)
-
-제안하는 순서 (로컬 VM에서 먼저 baseline 파이프라인 검증):
-1. fio 설치 (sudo apt install fio)
-2. make로 재빌드 → sudo insmod ./nvmev.ko memmap_start=2G memmap_size=1G cpus=2,3
-3. /proc/nvmev 생성 확인 + mount, chown
-4. 생성된 디바이스에 대고 간단한 fio 테스트 한 번 돌려서 I/O가 정상적으로 도는지 확인
-5. (나중에) filebench는 서버(실험 서버)에 이미 설치되어 있는지 확인 필요 — 없으면 소스 빌드 여부 결정
-
-이 순서로 진행할까요? 2번 단계(insmod)부터는 커널 모듈을 실제로 로드하는 작업이라 진행 전에 확인 받고 싶어요.
+## 진행 상황 (2026-07-23 기준)
+- 로컬 VM: `nvmev` 모듈 로드됨, `/dev/nvme0n1` ext4 포맷 + `~/nvme_mount` 마운트 완료
+- fio 설치 완료, 순차/랜덤 쓰기 테스트로 I/O 정상 동작 확인
+- filebench 소스 빌드 + 설치 완료 (`~/filebench`에 클론, `/usr/local/bin/filebench`), ASLR 끄고 스모크 테스트로 정상 동작 확인
+- Random/Cost-Benefit GC 정책: 아직 미착수
+- erase_cnt 측정용 `/proc/nvmev/debug` 인터페이스: 아직 미착수
+- 서버(147.46.241.107)에 filebench 설치 여부: 아직 미확인
