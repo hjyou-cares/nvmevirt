@@ -22,23 +22,29 @@
 ## 실습 목표 (실습 1: Cost-Benefit GC)
 NVMeVirt의 Conventional FTL(`conv_ftl.c`)에서 GC victim 선택 정책 3가지를 구현하고 비교:
 1. **Greedy (baseline)** — 이미 구현되어 있음. `victim_line_get_pri()`가 `line->vpc`(valid page count)를 리턴하고, `pqueue_peek`/`pqueue_pop`이 vpc가 가장 작은 line을 뽑음 (최소힙).
-2. **Random** — 아직 미구현.
+2. **Random** — 구현 완료 (2026-07-23). `conv_ftl.c` 상단 `gc_policy` module_param(0/1/2) + `select_victim_line()` 분기. 로컬 VM 실측으로 Greedy 대비 erase가 훨씬 고르게 분산되는 것까지 검증함. 자세한 내용은 "코드 구조 요약", EXPERIMENT_LOG.md 참고.
 3. **Cost-Benefit** — 아직 미구현.
 
 평가: NVMeVirt 가상 SSD에 Filebench/FIO 벤치마크 실행 후, 정책별로 아래 측정:
 - 블록별 Erase 횟수 (`mark_block_free()`의 `blk->erase_cnt++`)
 - 호스트 IO AVG, Tail Latency
 
-**중요**: `erase_cnt`는 현재 커널 모듈 밖으로 노출되는 통로가 전혀 없음 (`/proc/nvmev/stat`엔 큐 통계만 있고 FTL/GC 관련 필드 없음, `printk`/`seq_printf` 등 아무것도 안 걸려있음). `main.c`의 `debug` proc 파일(`__proc_file_read` 353번째 줄 근처, `strcmp(filename, "debug")` 분기)이 지금 비어있어서(`/* Left for later use */`) 여기에 erase_cnt 덤프 기능을 직접 구현해야 측정이 가능함. 이것도 실습 구현 범위에 포함시켜야 함.
+`erase_cnt`를 밖에서 보는 문제는 해결됨 (2026-07-23): `main.c`의 `debug` proc 파일에 dump/reset 기능 구현 완료. 사용법은 아래 "GC 정책 실험용 커맨드 레퍼런스 § 4" 참고.
 
 ## 코드 구조 요약 (핵심 함수 위치, conv_ftl.c 기준)
-- `victim_line_cmp_pri`, `victim_line_get_pri`, `victim_line_set_pri`, `victim_line_get_pos/set_pos` (68~92줄): pqueue 콜백. `pqueue_init()`(`init_lines()` 안)에 등록됨.
+- `gc_policy` (파일 상단, Random 구현 시 추가): module_param, 0=Greedy/1=Random/2=Cost-Benefit. `enum gc_victim_policy`도 같이 정의됨.
+- `victim_line_cmp_pri`, `victim_line_get_pri`, `victim_line_set_pri`, `victim_line_get_pos/set_pos` (68~92줄): pqueue 콜백. `pqueue_init()`(`init_lines()` 안)에 등록됨. **Random 구현 후에도 이 함수들은 안 건드림** (이유: pqueue 힙 불변식 깨짐, 아래 "pqueue 라이브러리" 항목 참고).
 - `consume_write_credit`, `check_and_refill_write_credit` (93~108줄): write credit 소진 시 `foreground_gc()` 트리거.
 - `struct line` (conv_ftl.h): `id`, `ipc`, `vpc`, `pos` 필드. **Cost-Benefit 구현 시 age 관련 필드 추가 필요할 것.**
 - `struct line_mgmt`(`lm`, conv_ftl.h): `lines`(전체 line 배열), `free_line_list`, `victim_line_pq`, `full_line_list`, `free_line_cnt` 등.
 - `mark_page_invalid()` (~490줄): 페이지 invalid 처리. `line->pos`가 있으면(이미 pqueue 안에 있으면) `pqueue_change_priority()`로 즉시 재정렬, line이 막 full→invalid 전환되는 순간 `pqueue_insert()`로 큐에 새로 들어감.
-- `select_victim_line()` (~645줄): `pqueue_peek()`으로 1등 확인 → force 아니면 vpc 임계치 체크 → `pqueue_pop()`으로 실제로 꺼냄.
+- `select_victim_line()` (~645줄, Random 추가 후 줄번호 밀림): `pqueue_peek()`으로 1등 확인 (모든 정책 공통 게이트) → force 아니면 vpc 임계치 체크 → **`gc_policy`가 Random이면** `pq->d[]`에서 무작위 인덱스로 `pqueue_remove()`, **아니면** 기존처럼 `pqueue_pop()`.
 - `do_gc()` (753줄), `clean_one_flashpg()` (693줄): 실제 GC 수행 (valid page 이관 → block erase → line 반환).
+
+## erase_cnt 노출 (main.c, 2026-07-23 구현)
+- `__walk_conv_blocks(m, mode)`: `__proc_file_read()` 바로 위에 정의된 헬퍼. `nvmev_vdev->ns[]` → `conv_ftl` → `ssd->ch[]/lun[]/pl[]/blk[]` 계층을 순회하며, `BLOCK_WALK_DUMP`면 `erase_cnt`를 한 줄씩 `seq_printf`, `BLOCK_WALK_RESET`이면 0으로 초기화.
+- `/proc/nvmev/debug` read/write 핸들러(`__proc_file_read`/`__proc_file_write`의 `"debug"` 분기)에서 이 헬퍼를 호출하도록 연결됨.
+- `NS_SSD_TYPE(ns_id) == SSD_TYPE_CONV`인 namespace만 처리 (zns/kv FTL은 건드리지 않음, `NVMEV_NAMESPACE_INIT`이 쓰는 패턴과 동일).
 
 ## pqueue 라이브러리 (pqueue/pqueue.c, pqueue/pqueue.h) 관련 중요 사실
 - Vendored 코드 (범용 외부 라이브러리 소스가 저장소 안에 그대로 포함됨). `conv_ftl.h`에서 `#include "pqueue/pqueue.h"`.
