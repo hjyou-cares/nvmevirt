@@ -24,6 +24,8 @@ struct line {
 	struct list_head entry;
 	/* position in the priority queue for victim lines */
 	size_t pos;
+	/* logical timestamp (cb_clock) when this line was last closed */
+	uint64_t mtime;
 };
 
 /* wp: record next write addr */

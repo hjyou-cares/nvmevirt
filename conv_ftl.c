@@ -19,6 +19,10 @@ static unsigned int gc_policy = GC_POLICY_GREEDY;
 module_param(gc_policy, uint, 0644);
 MODULE_PARM_DESC(gc_policy, "GC victim selection policy: 0=Greedy, 1=Random, 2=Cost-Benefit");
 
+/* logical clock for Cost-Benefit GC: incremented once per page write.
+ * Only ever touched from the single nvmev_dispatcher kthread, so no locking needed. */
+static uint64_t cb_clock = 0;
+
 static inline bool last_pg_in_wordline(struct conv_ftl *conv_ftl, struct ppa *ppa)
 {
 	struct ssdparams *spp = &conv_ftl->ssd->sp;
@@ -82,9 +86,27 @@ static inline int victim_line_cmp_pri(pqueue_pri_t next, pqueue_pri_t curr)
 	return (next > curr);
 }
 
+/* biggest possible pqueue_pri_t value, used to invert Cost-Benefit scores
+ * so that "smaller priority = better victim" still holds for the min-heap */
+#define CB_PRI_MAX (~0ULL)
+
 static inline pqueue_pri_t victim_line_get_pri(void *a)
 {
-	return ((struct line *)a)->vpc;
+	struct line *line = (struct line *)a;
+
+	if (gc_policy == GC_POLICY_COST_BENEFIT) {
+		uint64_t age, bc;
+
+		if (line->vpc == 0)
+			return 0; /* already fully invalid: best possible victim */
+
+		age = cb_clock - line->mtime;
+		bc = ((uint64_t)line->ipc * age) / (2ULL * (uint64_t)line->vpc);
+		/* bigger bc = better victim; invert so the min-heap picks it first */
+		return CB_PRI_MAX - bc;
+	}
+
+	return line->vpc;
 }
 
 static inline void victim_line_set_pri(void *a, pqueue_pri_t pri)
@@ -144,6 +166,7 @@ static void init_lines(struct conv_ftl *conv_ftl)
 			.ipc = 0,
 			.vpc = 0,
 			.pos = 0,
+			.mtime = 0,
 			.entry = LIST_HEAD_INIT(lm->lines[i].entry),
 		};
 
@@ -230,6 +253,8 @@ static void advance_write_pointer(struct conv_ftl *conv_ftl, uint32_t io_type)
 	struct line_mgmt *lm = &conv_ftl->lm;
 	struct write_pointer *wpp = __get_wp(conv_ftl, io_type);
 
+	cb_clock++;
+
 	NVMEV_DEBUG_VERBOSE("current wpp: ch:%d, lun:%d, pl:%d, blk:%d, pg:%d\n",
 			wpp->ch, wpp->lun, wpp->pl, wpp->blk, wpp->pg);
 
@@ -258,6 +283,8 @@ static void advance_write_pointer(struct conv_ftl *conv_ftl, uint32_t io_type)
 		goto out;
 
 	wpp->pg = 0;
+	/* line is now fully written and closed: stamp its age for Cost-Benefit */
+	wpp->curline->mtime = cb_clock;
 	/* move current line to {victim,full} line list */
 	if (wpp->curline->vpc == spp->pgs_per_line) {
 		/* all pgs are still valid, move to full line list */
@@ -529,8 +556,13 @@ static void mark_page_invalid(struct conv_ftl *conv_ftl, struct ppa *ppa)
 	NVMEV_ASSERT(line->vpc > 0 && line->vpc <= spp->pgs_per_line);
 	/* Adjust the position of the victime line in the pq under over-writes */
 	if (line->pos) {
-		/* Note that line->vpc will be updated by this call */
-		pqueue_change_priority(lm->victim_line_pq, line->vpc - 1, line);
+		/* remove+insert always re-reads get_pri() live, so this stays
+		 * correct regardless of what the active gc_policy's priority
+		 * formula is (unlike pqueue_change_priority, which trusts an
+		 * externally-computed new_pri that may be in different units) */
+		pqueue_remove(lm->victim_line_pq, line);
+		line->vpc--;
+		pqueue_insert(lm->victim_line_pq, line);
 	} else {
 		line->vpc--;
 	}
