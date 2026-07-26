@@ -84,6 +84,32 @@
 - raw 로그 경로: 없음 (터미널 출력만, `results/` 파이프라인 미구현)
 - 비고: 균등 랜덤쓰기라 콜드 데이터 개념이 없어서 Cost-Benefit이 Greedy와 비슷하게 좁은 블록 범위에 몰림 (다만 마모는 더 큼) — Cost-Benefit의 장점을 보려면 핫/콜드 섞인 워크로드 필요. 7/23에 기록된 Greedy 수치(`157136/9`)는 오늘 재현 안 돼서 신뢰도 낮음, 폐기하고 오늘 값을 기준선으로 채택.
 
+### 2026-07-26 22:01 — 정책: Greedy (결과 저장 파이프라인 검증용)
+- 커맨드: `./scripts/run_experiment.sh 0 pipelinetest` (내부적으로 7/24와 동일한 `gc_stress` fio 커맨드 실행)
+- 대상: 집 컴퓨터 (memmap_start=2G memmap_size=1G cpus=2,3), **fresh mkfs 직후 첫 실행** (VM 재부팅으로 ext4가 사라져서 `mkfs`부터 다시 한 상태 — "이슈/막힌 점" 참고)
+- 결과 요약:
+  - Erase count: `nonzero_blocks=19520, sum=62176, max=4`
+  - IO avg latency: 641274.2ns, p99 tail latency: 1056768ns (이번에 처음으로 latency까지 자동 기록됨)
+- raw 로그 경로: `results/20260726_220135_policy0_greedy_pipelinetest/`
+- 비고: 7/24 "파일 재사용" 조건 기준선(`19280/61008/4`)과 max만 일치하고 나머지는 다름 — 파이프라인 버그가 아니라 "fresh mkfs 직후 첫 쓰기" vs "기존 파일 재사용" 조건 차이로 추정 (CLAUDE.md "서버 벤치마크 전 남은 작업" 5번 참고). 정책 간 정식 비교 실험에서는 이 조건을 반드시 통일해야 함.
+
+### 2026-07-26 22:07~22:12 — 정책: Greedy / Random / Cost-Benefit 3종 첫 동일조건 비교 (파이프라인)
+- 커맨드: `./scripts/run_experiment.sh <0|1|2> pipelinetest` (동일 `gc_stress` 6GB 랜덤쓰기, 매 정책 전 sysfs로 `gc_policy` 전환 + `debug reset`)
+- 대상: 집 컴퓨터, 같은 세션 내에서 fresh mkfs 이후 연속 실행 (모듈 리로드 없이 `gc_policy` sysfs 전환만으로 정책 교체 — 앞선 Greedy 단독 실행 이후 매핑 테이블 상태가 이어짐, "완전히 독립적인 3회 실험"은 아님에 유의)
+- 결과 요약 (`scripts/collect_summary.sh` 집계):
+
+  | 정책 | nonzero_blocks | erase sum | erase max | lat avg (ns) | lat p99 (ns) |
+  |---|---|---|---|---|---|
+  | Greedy | 19520 | 62176 | 4 | 641274.2 | 1056768 |
+  | Random | 106976 | 192084 | 6 | 619501.9 | 937984 |
+  | Cost-Benefit | 19596 | 192004 | 10 | 632721.4 | 978944 |
+
+- raw 로그 경로: `results/20260726_220135_policy0_greedy_pipelinetest/`, `results/20260726_220745_policy1_random_pipelinetest/`, `results/20260726_221119_policy2_costbenefit_pipelinetest/`
+- 비고:
+  - 7/24 관찰(균등 랜덤쓰기에서는 Cost-Benefit이 마모 분산 면에서 Greedy와 비슷하게 좁은 블록에 몰리고 max는 오히려 더 큼)이 이번 재측정에서도 그대로 재현됨 — `erase max`가 Greedy(4) < Random(6) < Cost-Benefit(10) 순으로, 지금 쓰는 콜드 데이터 없는 워크로드에서는 Cost-Benefit이 세 정책 중 가장 마모가 몰리는 걸로 보임. 최종 보고서용 결론을 내리려면 핫/콜드 혼합 워크로드로 재검증 필요 ("서버 벤치마크 전 남은 작업" 6번 참고).
+  - Latency는 Random이 가장 낮고(avg/p99 모두) Greedy가 가장 높음 — 다만 이번 실행은 정책마다 매핑 테이블/erase_cnt 누적 상태가 다른 채로(리로드 없이 순서대로 실행) 잰 것이라, 정책 간 latency 우열을 지금 이 수치만으로 단정하기는 이름. 정식 비교에는 매 정책 실행 전 모듈 리로드(또는 최소 mkfs)로 상태를 통일할 것.
+  - `results/20260726_215836_policy0_greedy_pipelinetest`(Greedy 첫 파이프라인 시험, 22:01 항목과 별개의 이전 시도)와 `results/20260726_220959_policy1_random_pipelinetest`(summary.txt/meta.txt 없이 fio.json만 존재하는 미완료 실행)는 불완전한 중간 시도라 위 표 집계에서 제외함.
+
 ---
 
 ## 이슈 / 막힌 점
@@ -117,7 +143,37 @@
 - 원인: `erase_cnt` 같은 FTL 내부 통계(커널 힙에 매번 새로 kmalloc/vmalloc되는 구조체)는 리로드 시 초기화되지만, `memmap=`으로 예약된 물리 메모리 영역(실제 "플래시" 바이트가 저장되는 곳)은 module reload로 지워지지 않는 것으로 보임. ext4 파일시스템 자체도 그 메모리 위에 있어서 같이 남음.
 - 해결: 아직 완전히 해결 안 됨 — 정책 간 벤치마크를 완전히 깨끗한 상태에서 비교하려면 `mkfs`를 매번 다시 할지, 아니면 "기존 파일 재사용"으로 통일할지 결정 필요 (CLAUDE.md "서버 벤치마크 전 남은 작업" 5번 항목 참고). 다만 "기존 파일 재사용" 조건을 고정하면 Greedy 결과가 완벽히 재현되는 것까지는 확인함 (아래 항목 참고).
 
+### 2026-07-26
+- 증상: 집 컴퓨터에서 모듈 리로드 1단계(umount→rmmod→make→insmod) 후 `sudo mount /dev/nvme0n1 ~/nvme_mount` 실행 시 `wrong fs type, bad option, bad superblock on /dev/nvme0n1, missing codepage or helper program, or other error` 에러 발생.
+- 원인: VM 자체를 껐다 켰음(재부팅). `memmap=`으로 예약된 DRAM 영역은 진짜 물리 메모리라 재부팅하면 내용이 통째로 사라짐 — 그 위에 있던 ext4 슈퍼블록/파일시스템 구조도 같이 날아가서 마운트할 게 없는 상태였음. 7/24에 확인한 "모듈 리로드만으론 데이터 안 지워짐"은 OS가 계속 켜져 있는 경우에만 해당하고, VM 재부팅은 이 전제 자체를 깨뜨림.
+- 해결: `sudo mkfs -t ext4 /dev/nvme0n1` 재실행 후 정상 마운트됨. 앞으로 VM을 재부팅한 뒤에는 모듈 리로드뿐 아니라 `mkfs`도 다시 해야 한다는 걸 체크리스트에 추가할 것.
+
+### 2026-07-26
+- 증상: 집 컴퓨터에서 `./scripts/run_experiment.sh` 실행 시 `fio: command not found`류 에러.
+- 원인: 연구실 VM에는 fio가 설치돼 있었지만, 집 컴퓨터는 별도로 프로비저닝된 환경이라 처음부터 설치가 안 되어 있었음.
+- 해결: `sudo apt install -y fio`로 설치. 앞으로 새 컴퓨터/환경에서 작업 시작 전엔 fio/filebench 설치 여부부터 확인하기로 함 (사용자가 "환경 차이는 항상 기록하자"고 명시적으로 요청함).
+
 ### 2026-07-24
 - 증상: 7/23에 기록한 Greedy 기준선(`nonzero_blocks=19424, sum=157136, max=9`)과 7/24에 다시 잰 값(`19280/61008/4`)이 2.5배 넘게 차이남 — "Greedy도 원래 매번 다르게 나오는 거 아니냐"는 의문이 생김.
 - 원인: Greedy는 victim 선택에 난수가 전혀 없고(vpc 최솟값을 그냥 고름) fio도 기본 `randrepeat=1`이라 매번 같은 순서로 씀 — 즉 이론적으로 완전히 결정론적이어야 함. 모듈을 리로드해서 동일 조건(Greedy, reset 직후, 동일 fio 커맨드)으로 2회 연속 재현 테스트한 결과 **두 번 다 `19280/61008/4`로 완전히 일치** (최초 측정까지 3회 연속 동일). 즉 오늘 값 쪽이 정확하고, 7/23 값이 이상값이었던 것으로 보임. 7/23 당시 정확히 어떤 조건이 달랐는지는(진짜 reset 직후였는지, 파일이 새로 쓰이는 상태였는지 등) 로그에 안 남아있어서 정확한 원인은 미확정.
 - 해결: 7/23 Greedy 수치는 신뢰도 낮음으로 표시하고 폐기, 오늘 재현된 `19280/61008/4`를 새 기준선으로 채택. 앞으로 벤치마크할 때는 "리로드 직후 + reset 직후"라는 조건을 매번 로그에 명시해서 재현성을 추적할 것.
+
+### 2026-07-26
+- 무엇을: `scripts/run_experiment.sh`, `scripts/collect_summary.sh`, `results/` 디렉토리 추가 — 결과 저장 파이프라인 구현.
+  - `run_experiment.sh <policy 0|1|2> <label>`: `gc_policy` sysfs 전환 → `/proc/nvmev/debug reset` → 기존 검증된 `gc_stress` fio 커맨드를 `--output-format=json`으로 실행(latency 포함) → erase_cnt 재덤프 → awk summary → meta.txt(정책/라벨/타임스탬프/fio 커맨드) 까지 한 번에 생성, 결과는 `results/<타임스탬프>_policy<n>_<정책명>_<라벨>/`에 저장.
+  - `collect_summary.sh`: `results/` 밑 모든 run의 `meta.txt`/`summary.txt`/`fio.json`(jq로 avg latency, p99 tail latency 추출)을 훑어서 CSV 한 줄씩으로 집계 (`timestamp,policy,policy_name,label,nonzero_blocks,erase_sum,erase_max,lat_avg_ns,lat_p99_ns`).
+- 왜: 지금까지 터미널에서 `awk`로 즉석 확인만 하고 raw 로그를 저장 안 해서, 나중에 그래프 그릴 때 쓸 데이터가 없었음. "서버 벤치마크 전 남은 작업" 4번 항목 해소.
+- 검증: 집 컴퓨터 로컬 환경에서 Greedy(policy=0)로 `run_experiment.sh 0 pipelinetest` 실행 → `fio.json`/`erase_cnt.txt`/`meta.txt`/`summary.txt` 4개 파일 정상 생성, `nonzero_blocks=19520 sum=62176 max=4` 확인. `collect_summary.sh` 실행 → CSV 한 줄로 정상 집계, jq로 `lat_avg_ns=641274.209063`, `lat_p99_ns=1056768` 정상 추출 확인.
+- sudo 필요한 부분(`gc_policy` 쓰기, `debug reset`)은 에이전트 셸에 인터랙티브 터미널이 없어서 여전히 사용자가 직접 실행해야 함 (2026-07-23 "이슈" 항목과 동일 제약, 집 컴퓨터에서도 재확인됨).
+- 커밋: (미커밋, `scripts/`·`results/` 새 파일)
+
+- 무엇을: 이번 주말부터 집 컴퓨터에서 작업 시작 (그동안은 연구실 컴퓨터). `git pull` 하니 origin에 로컬에 없던 12개 커밋(이 `CLAUDE.md`/`EXPERIMENT_LOG.md` 최초 추가 포함)이 이미 들어와 있었음. 로컬 `main.c`엔 의미 없는 빈 줄 하나만 있던 상태라 그 변경은 버리고 fast-forward pull 진행.
+- 왜: CLAUDE.md에 이미 적혀 있던 "이 fork를 여러 환경에서 건드리면 동기화가 어긋날 수 있다"는 경고가 실제로 재현된 사례라 기록해둠.
+- 커밋: (해당 없음, git 동기화 이슈 기록)
+
+- 무엇을: 집 컴퓨터 환경에서 연구실 VM과 다른 점 2가지 발견/해결.
+  1. `fio`가 설치 안 되어 있었음 → `sudo apt install -y fio`로 설치.
+  2. 모듈 리로드(umount→rmmod→make→insmod→mount) 도중 `mount`가 `wrong fs type, bad option, bad superblock` 에러로 실패.
+- 왜/원인: (1)은 별도로 프로비저닝된 환경이라 패키지 상태가 다름. (2)는 VM 자체를 껐다 켰기 때문 — `memmap=`으로 예약된 DRAM 영역 내용이 재부팅으로 전부 날아가서, 7/24에 확인한 "모듈 리로드만으론 데이터 안 지워짐"이라는 전제(OS가 계속 켜져 있는 경우 한정)가 깨짐. 사용자가 "환경 차이/패키지 설치가 필요한 경우 항상 기록하라"고 명시적으로 요청해서 이 규칙에 따라 남김.
+- 해결: (1) `apt install`. (2) `sudo mkfs -t ext4 /dev/nvme0n1` 재실행 후 정상 마운트됨.
+- 커밋: (해당 없음, 환경 이슈 기록)

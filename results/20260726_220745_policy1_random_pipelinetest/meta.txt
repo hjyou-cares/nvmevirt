@@ -1,0 +1,5 @@
+timestamp=20260726_220745
+policy=1
+policy_name=random
+label=pipelinetest
+fio_cmd=fio --name=gc_stress --filename=$HOME/nvme_mount/testfile2 --size=600M --rw=randwrite --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=10 --group_reporting
