@@ -53,6 +53,30 @@
 - 검증: 로컬 VM `make`/`insmod` 정상 (dmesg 에러 없음). Greedy(0) 회귀 테스트로 기존 동작 유지 확인. `gc_policy=2`로 전환 후 6GB 랜덤쓰기 스트레스 테스트 크래시 없이 통과. 자세한 수치는 아래 "벤치마크 실행 로그" 참고.
 - 커밋: `4350133`
 
+### 2026-07-27
+- 무엇을: `scripts/run_experiment.sh`에 `workload` 파라미터(uniform/hotcold) 추가, 매 실행마다 `umount→mkfs→mount→chown`으로 완전히 새 파일시스템에서 시작하도록 변경. `scripts/workloads/hotcold.fio` 신설.
+- 왜: CLAUDE.md "서버 벤치마크 전 남은 작업" 5번(mkfs 조건 통일)과 6번(워크로드 다양성) 착수.
+- 검증: uniform 워크로드는 기존 `pipelinetest`와 동일하게 동작. hotcold 워크로드는 아래 항목대로 3번 재설계하며 검증.
+- 커밋: (미커밋)
+
+- 무엇을: `hotcold.fio` 워크로드 3버전(v1→v2→v3) 설계 및 "Cost-Benefit이 Greedy와 erase 통계가 수렴하는" 현상의 근본 원인 규명.
+  - v1: coldfile(500M, 1회 순차쓰기) + hotfile(50M, 120루프 랜덤쓰기), `stonewall`로 시간 분리.
+  - v2: 단일 파일 + `random_distribution=zoned:80/10:20/90`.
+  - v3: 단일 파일 + `random_distribution=zoned:60/20:40/80` (스큐 완화).
+- 왜: v1으로 첫 3정책 비교(아래 "벤치마크 실행 로그" 11:26~11:29 항목)를 했을 때 Greedy와 Cost-Benefit의 erase 통계가 사실상 동일하게 나옴 — "콜드 데이터가 있으면 CB가 유리할 것"이라는 기대와 반대. `victim_line_get_pri()`에 임시로 샘플링 printk(500회마다 1번, `vpc/ipc/mtime/cb_clock/age/bc` 출력)를 추가해서 3차례 실측:
+  1. **v1 진단**: 캡처된 후보 라인들의 age가 12669~12799로 변동폭 약 1%밖에 안 됨. `advance_write_pointer()`/`mark_page_invalid()` 로직상 `vpc==pgs_per_line`(100% valid)인 라인은 `full_line_list`로 가고 victim pqueue엔 아예 안 들어감 — 콜드파일을 다시 안 건드리니 그 라인들은 영원히 여기 머무름. 결국 GC 후보 풀은 전부 "핫" 라인뿐이라 age 편차가 생길 여지 자체가 없었음.
+  2. **v2 진단**: age는 실제로 크게 벌어짐(1,000~153,600, 150배 차이)에도 erase_sum/max는 여전히 Greedy와 동일. vpc 분포를 보니 vpc=1~6인 후보가 전체 샘플(2649개)의 46%(1218개)를 차지 — 핫 영역이 너무 빨리 재기록되면서 "거의 다 무효화된"(vpc가 매우 작은) 후보가 거의 항상 대기 중이었음. `bc=ipc*age/(2*vpc)` 수식상 vpc가 작으면 age가 아무리 벌어져도 못 따라잡을 만큼 bc가 커지므로, 그런 후보가 항상 있으면 CB도 결국 Greedy와 같은 선택을 함.
+  3. **v3 진단**: 스큐를 완화하니 vpc 분포가 실제로 넓게 퍼짐(vpc=1 샘플이 194→41개로 감소, vpc=6~9 구간이 최빈값). age도 여전히 넓게 분포(166~1,540,361). 그럼에도 erase_sum/max는 또 동일(`62084/4`로 완전히 같음). 다만 nonzero_blocks는 이번엔 좀 더 벌어짐(Greedy 25260 vs CB 25272) — CB가 실제로 다른 구체적 블록을 고르긴 하되, 총 erase 횟수/최대 마모는 결국 수렴한다는 것을 확인.
+- 결론: **erase 통계 수렴은 버그가 아니라 실측으로 확인된 현상**. 이 스케일/워크로드에서는 어떤 정책을 쓰든 "erase당 회수하는 평균 valid page 수"가 비슷해져서 총 write amplification이 수렴하는 것으로 보임. Cost-Benefit의 개별 victim 선택은 실제로 Greedy와 다르지만(vpc/age 샘플 데이터로 확인), 그게 이 워크로드 규모의 총량 지표엔 크게 안 드러남 — 리포트에서 다룰만한 정직한 분석 포인트.
+- 검증: 진단용 printk는 최종적으로 제거하고 원본 상태로 재빌드 (`git diff conv_ftl.c` 결과 없음, 원본과 완전히 동일함 확인).
+- 커밋: (미커밋)
+
+- 무엇을: 모듈 리로드 없이 `gc_policy`만 sysfs로 전환하며 정책을 이어서 비교하는 방식이 방법론적으로 오염돼 있었다는 것을 발견.
+- 왜: `mkfs`는 ext4 파일시스템(메타데이터)만 초기화하고, FTL 내부 상태(`cb_clock`, write pointer, free line list, 각 line의 valid/invalid 상태)는 초기화 안 됨 — 이건 `rmmod`→`insmod`(모듈 완전 리로드)로만 리셋됨. 그래서 Random→Greedy→Cost-Benefit 순으로 모듈 리로드 없이 이어서 돌리면, 뒤에 실행되는 정책이 앞 정책이 남긴 물리 상태(특히 `cb_clock`)를 그대로 물려받음.
+- 검증: 완전 리로드 직후 CB만 단독 실행한 결과(`nonzero_blocks=1680 sum=78032 max=47`)가, 모듈 리로드 없이 이어서 실행했던 기존 CB 결과(`18340/208484/105`)와 크게 다름 — 오염 가설의 직접 증거.
+- 이후 조치: 정책 비교 시 정책마다 모듈을 완전히 리로드하는 걸로 절차 확정. CLAUDE.md "모듈 리로드 사이클" 절에 경고 추가.
+- 커밋: (미커밋, 방법론 발견이라 코드 변경 없음)
+
 ---
 
 ## 벤치마크 실행 로그
@@ -109,6 +133,61 @@
   - 7/24 관찰(균등 랜덤쓰기에서는 Cost-Benefit이 마모 분산 면에서 Greedy와 비슷하게 좁은 블록에 몰리고 max는 오히려 더 큼)이 이번 재측정에서도 그대로 재현됨 — `erase max`가 Greedy(4) < Random(6) < Cost-Benefit(10) 순으로, 지금 쓰는 콜드 데이터 없는 워크로드에서는 Cost-Benefit이 세 정책 중 가장 마모가 몰리는 걸로 보임. 최종 보고서용 결론을 내리려면 핫/콜드 혼합 워크로드로 재검증 필요 ("서버 벤치마크 전 남은 작업" 6번 참고).
   - Latency는 Random이 가장 낮고(avg/p99 모두) Greedy가 가장 높음 — 다만 이번 실행은 정책마다 매핑 테이블/erase_cnt 누적 상태가 다른 채로(리로드 없이 순서대로 실행) 잰 것이라, 정책 간 latency 우열을 지금 이 수치만으로 단정하기는 이름. 정식 비교에는 매 정책 실행 전 모듈 리로드(또는 최소 mkfs)로 상태를 통일할 것.
   - `results/20260726_215836_policy0_greedy_pipelinetest`(Greedy 첫 파이프라인 시험, 22:01 항목과 별개의 이전 시도)와 `results/20260726_220959_policy1_random_pipelinetest`(summary.txt/meta.txt 없이 fio.json만 존재하는 미완료 실행)는 불완전한 중간 시도라 위 표 집계에서 제외함.
+
+### 2026-07-27 11:26~11:29 — 정책: Greedy / Random / Cost-Benefit 3종 비교 (hotcold v1, ⚠️ 오염된 실행 — 참고용으로만 남김)
+- 커맨드: `./scripts/run_experiment.sh <0|1|2> hotcold1 hotcold` (v1 워크로드: coldfile 500M 1회 + hotfile 50M×120루프, stonewall)
+- 대상: 로컬 VM, **모듈 리로드 없이** `gc_policy` sysfs 전환만으로 정책 교체 (mkfs는 매번 새로 함)
+- 결과 요약:
+
+  | 정책 | nonzero_blocks | erase sum | erase max | lat avg(μs) | lat p99(μs) |
+  |---|---|---|---|---|---|
+  | Random | 58164 | 79212 | 5 | 135.5 | 257.0 |
+  | Greedy | 18332 | 208496 | 105 | 149.8 | 272.4 |
+  | Cost-Benefit | 18340 | 208484 | 105 | 158.9 | 297.0 |
+
+- raw 로그 경로: `results/20260727_112639_policy1_random_hotcold1/`, `results/20260727_112902_policy0_greedy_hotcold1/`, `results/20260727_112924_policy2_costbenefit_hotcold1/`
+- 비고: **이후 모듈 리로드 없이 정책을 이어서 돌리면 `cb_clock`/write pointer 등 FTL 내부 상태가 오염된다는 게 밝혀져서(위 "진행 로그" 참고), 이 비교는 방법론적으로 무효로 판정함.** Greedy와 CB가 거의 동일하게 나온 원인이 이 오염 때문인지 v1 워크로드의 콜드파일 설계 문제 때문인지 헷갈렸는데, 실제로는 두 문제가 겹쳐 있었던 것으로 결론남 (둘 다 아래에서 별도로 규명/수정됨).
+
+### 2026-07-27 11:50 — 정책: Cost-Benefit 단독 재실행 (완전 리로드, printk 진단용)
+- 커맨드: `./scripts/run_experiment.sh 2 hotcold_debug hotcold` (v1 워크로드, `victim_line_get_pri()`에 샘플링 printk를 추가한 빌드)
+- 대상: 로컬 VM, `rmmod`→`insmod` 완전 리로드 직후 단독 실행
+- 결과 요약: `nonzero_blocks=1680 sum=78032 max=47` — 위 오염된 비교의 CB 결과(`18340/208484/105`)와 크게 다름. 모듈 리로드 오염 가설의 직접 증거.
+- raw 로그 경로: `results/20260727_115024_policy2_costbenefit_hotcold_debug/`
+- 비고: 이 시점 dmesg의 `cb_sample` printk 출력에서 후보 라인 age가 12669~12799(변동폭 약 1%)로 확인 — v1 워크로드의 콜드파일이 GC 후보 풀에 전혀 안 들어간다는 걸 뒷받침.
+
+### 2026-07-27 12:06~12:07 — 정책: Greedy / Random / Cost-Benefit (hotcold v2, `zoned:80/10:20/90`, 완전 리로드)
+- 커맨드: `./scripts/run_experiment.sh <0|1|2> hotcold_v2 hotcold`
+- 대상: 로컬 VM, 정책마다 `rmmod`→`insmod` 완전 리로드
+- 결과 요약:
+
+  | 정책 | nonzero_blocks | erase sum | erase max |
+  |---|---|---|---|
+  | Greedy | 25856 | 62064 | 4 |
+  | Random | 51180 | 64816 | 5 |
+  | Cost-Benefit | 25816 | 62064 | 4 |
+
+- raw 로그 경로: `results/20260727_120656_policy0_greedy_hotcold_v2/`, `results/20260727_120723_policy1_random_hotcold_v2/`, `results/20260727_120747_policy2_costbenefit_hotcold_v2/`
+- 비고: 모듈 리로드 오염을 없앴는데도 Greedy와 CB의 erase_sum/max가 완전히 동일 — v1의 콜드파일 문제와는 다른 원인이 있다는 뜻. printk 재측정(아래 항목)으로 "스큐가 너무 강해서 vpc가 극단적으로 작은 후보가 항상 있었기 때문"이라는 원인을 찾음.
+
+### 2026-07-27 12:14 — 정책: Cost-Benefit (hotcold v2, printk 재측정)
+- 커맨드: `./scripts/run_experiment.sh 2 hotcold_v2_debug hotcold`
+- 결과 요약: `nonzero_blocks=25820 sum=62064 max=4` (위 v2 비교와 일관됨). dmesg `cb_sample` 2649개 샘플 분석: age는 0~1,536,835로 넓게 분포하지만, vpc=1~6 구간에 샘플의 46%(1218/2649)가 몰림.
+- raw 로그 경로: `results/20260727_121437_policy2_costbenefit_hotcold_v2_debug/`
+- 비고: vpc가 극단적으로 작은(거의 다 무효화된) 후보가 항상 대기 중이면, `bc=ipc*age/(2*vpc)` 수식상 age가 아무리 벌어져도 vpc가 작은 쪽이 이겨서 CB가 Greedy와 같은 선택을 하게 됨 — 스큐 완화(v3)로 이어짐.
+
+### 2026-07-27 12:20~12:27 — 정책: Greedy / Random / Cost-Benefit 최종 비교 (hotcold v3, `zoned:60/20:40/80`, 완전 리로드, printk 제거된 클린 빌드)
+- 커맨드: `./scripts/run_experiment.sh <0|1|2> hotcold_v3_final hotcold`
+- 대상: 로컬 VM, 정책마다 `rmmod`→`insmod` 완전 리로드, `victim_line_get_pri()` 디버그 printk는 제거하고 재빌드한 상태
+- 결과 요약:
+
+  | 정책 | nonzero_blocks | erase sum | erase max | lat avg(μs) | lat p99(μs) |
+  |---|---|---|---|---|---|
+  | Greedy | 25260 | 62084 | 4 | 92.9 | 197.6 |
+  | Random | 52488 | 67208 | 5 | 107.1 | 250.9 |
+  | Cost-Benefit | 25272 | 62084 | 4 | 89.0 | 216.1 |
+
+- raw 로그 경로: `results/20260727_122440_policy0_greedy_hotcold_v3_final/`, `results/20260727_122513_policy1_random_hotcold_v3_final/`, `results/20260727_122725_policy2_costbenefit_hotcold_v3_final/`
+- 비고: 스큐를 완화(v2의 80/10 → v3의 60/20)해서 vpc 분포는 실제로 넓게 퍼졌지만(printk로 확인, vpc=1 샘플이 194→41개로 감소) erase_sum/max는 여전히 Greedy와 CB가 동일. nonzero_blocks는 이번엔 조금 더 벌어짐(25260 vs 25272) — CB가 실제로 다른 블록을 고르지만 총량 지표엔 수렴한다는 결론. Latency는 이번 실행에서 avg는 CB가 더 낮고(89.0 vs 92.9) p99는 오히려 CB가 더 높음(216.1 vs 197.6) — 직전 v3_debug 실행(printk 오버헤드 있음, avg 89.3/p99 207.9)과 p99 우열이 뒤바뀜. **반복측정 안 한 1회성 값이라 latency 우열은 노이즈일 가능성이 있음. 사용자 판단으로 반복측정은 생략하고 서버 벤치마크로 넘어가기로 함.**
 
 ---
 
@@ -177,3 +256,23 @@
 - 왜/원인: (1)은 별도로 프로비저닝된 환경이라 패키지 상태가 다름. (2)는 VM 자체를 껐다 켰기 때문 — `memmap=`으로 예약된 DRAM 영역 내용이 재부팅으로 전부 날아가서, 7/24에 확인한 "모듈 리로드만으론 데이터 안 지워짐"이라는 전제(OS가 계속 켜져 있는 경우 한정)가 깨짐. 사용자가 "환경 차이/패키지 설치가 필요한 경우 항상 기록하라"고 명시적으로 요청해서 이 규칙에 따라 남김.
 - 해결: (1) `apt install`. (2) `sudo mkfs -t ext4 /dev/nvme0n1` 재실행 후 정상 마운트됨.
 - 커밋: (해당 없음, 환경 이슈 기록)
+
+### 2026-07-27
+- 증상: 정책마다 모듈 리로드 없이 `gc_policy`만 sysfs로 바꿔가며 이어서 실행한 3정책 비교(11:26~11:29)에서 Greedy와 Cost-Benefit의 erase 통계가 거의 동일하게 나옴.
+- 원인: `mkfs`는 파일시스템만 초기화하고 FTL 내부 상태(`cb_clock`, write pointer, free line list 등)는 초기화 안 함 — 이건 모듈 완전 리로드(`rmmod`→`insmod`)로만 리셋됨. 뒤에 실행된 정책이 앞 정책이 남긴 물리적 상태를 그대로 물려받아서 비교가 오염됨.
+- 해결: 정책 비교 시 반드시 정책마다 모듈을 완전히 리로드하도록 절차 확정. CLAUDE.md "모듈 리로드 사이클" 절에 경고 추가.
+
+### 2026-07-27
+- 증상: (위 이슈 해결 후에도) hotcold v1 워크로드(coldfile 1회 쓰기 + hotfile 반복 쓰기)에서 여전히 Greedy와 Cost-Benefit이 거의 동일하게 동작.
+- 원인: 콜드파일을 한 번도 다시 안 건드리면 그 line들은 계속 100% valid로 남아서 `advance_write_pointer()`가 `full_line_list`로 보내고 victim pqueue엔 아예 안 들어감(`mark_page_invalid()`가 애초에 호출 안 됨) — Cost-Benefit이 age를 계산할 후보 자체가 전부 "핫" line뿐이라 age 편차가 생길 여지가 없었음(printk 실측: age 변동폭 약 1%).
+- 해결: `hotcold.fio`를 v2로 재설계 — 콜드 영역도 낮은 빈도로나마 덮어써지도록 `random_distribution=zoned`로 접근 빈도 자체를 스큐(하나의 파일 안에서 처리).
+
+### 2026-07-27
+- 증상: v2(`zoned:80/10:20/90`)로 재설계한 뒤에도 Greedy와 Cost-Benefit의 erase_sum/max가 여전히 동일.
+- 원인: 스큐가 너무 강해서 핫 영역이 극도로 빨리 재기록되며 vpc가 매우 작은(거의 다 무효화된) 후보가 GC 후보 풀에 항상 대기 중이었음(printk 실측: vpc=1~6 구간이 전체 샘플의 46%). `bc=ipc*age/(2*vpc)` 수식은 vpc가 작을수록 다른 항을 압도하므로, 이런 후보가 항상 있으면 age가 아무리 벌어져도 CB가 Greedy와 동일한 선택을 하게 됨.
+- 해결: 스큐를 완화(`zoned:60/20:40/80`, v3)해서 vpc 분포를 더 넓게 폄. 다만 이렇게 해도 erase 총량 지표는 여전히 수렴함 — 이건 버그가 아니라 이 스케일/워크로드에서 실제로 관찰되는 현상으로 결론 내림(자세한 내용은 "벤치마크 실행 로그" 12:20~12:27 항목, "진행 로그" 참고).
+
+### 2026-07-27
+- 증상: 서버(147.46.241.107, 포트 220) SSH 접속 시도 시 연결 타임아웃.
+- 원인: 미확인 — VPN/캠퍼스 네트워크가 필요하거나, 로컬 VM에서 서버로 직접 못 나가는 네트워크 구성일 가능성. 사용자에게 정확한 접속 방법(사용자명, VPN 필요 여부, 인증 방식)을 확인 요청한 상태.
+- 해결: 미해결, 다음 세션에서 이어서 진행.

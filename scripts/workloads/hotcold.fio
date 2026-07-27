@@ -1,0 +1,46 @@
+# 핫/콜드 혼합 워크로드 (2026-07-27 재설계, v2)
+#
+# v1(coldfile 500M 1회 쓰기 + hotfile 반복 랜덤쓰기, stonewall)의 문제:
+# 콜드파일을 다시 안 건드리면 그 라인들은 계속 100% valid로 남아서
+# advance_write_pointer()가 full_line_list로 보내고 victim pqueue에는
+# 아예 안 들어감 -> Cost-Benefit이 age를 계산할 후보 자체가 전부 "핫" 라인뿐이라
+# age 편차가 거의 없었음 (printk로 실측: 후보 라인 age가 12669~12799로 변동폭 약 1%).
+# 그 결과 CB의 (ipc*age)/(2*vpc) 계산이 사실상 ipc/vpc(=Greedy의 vpc 기준과 동일 순서)로
+# 수렴해서 Greedy와 거의 동일하게 동작했음.
+#
+# v2: 파일 하나에 fio의 random_distribution=zoned로 접근 빈도 자체를 스큐.
+# "쓰기의 80%는 파일 앞 10% 영역(핫)에 몰리고, 20%는 나머지 90% 영역(콜드)에 퍼진다"
+# -> 콜드 영역도 가끔 invalidate되어 pqueue에 들어오되, 핫 영역보다 훨씬 드물게
+# 재기록되므로 실제로 age 차이가 벌어짐. 총 쓰기량(6G)은 로컬 VM에서 GC가
+# 확실히 트리거되는 걸로 확인된 기존 uniform 워크로드와 동일하게 맞춤.
+#
+# v2(80/10)로 돌려본 결과: age는 실제로 크게 벌어졌지만(printk 실측 1,000~1,536,835,
+# 150배 이상 차이) Greedy/CB의 erase_sum·max가 완전히 동일하게 나옴. 원인을 vpc
+# 분포로 확인해보니 vpc=1~6인 후보가 전체 샘플의 46%를 차지 -- 핫 영역이 너무
+# 빨리/자주 재기록되면서 "거의 다 무효화된"(vpc가 매우 작은) 라인이 항상 대기 중이었음.
+# bc=ipc*age/(2*vpc) 수식상 vpc가 작으면 age가 아무리 벌어져도 못 따라잡을 정도로
+# bc가 압도적으로 커지므로, 그런 "압도적으로 좋은" 후보가 항상 있으면 CB도 결국
+# Greedy와 같은 걸 고르게 됨. Cost-Benefit이 실제로 의미를 가지려면 vpc가 비슷한
+# 후보들 사이에서 age로 타이브레이크하는 상황이 나와야 하는데, 스큐가 너무 강하면
+# 그 상황 자체가 잘 안 생김.
+#
+# v3: 스큐를 완화(60/20)해서 핫 영역이 vpc=1~2까지 극단적으로 빨리 안 떨어지게 하고,
+# 더 많은 라인이 "중간 정도로만 무효화된" 상태로 오래 머물게 함 -> vpc가 고만고만한
+# 후보들 사이에서 age 차이가 실제로 타이브레이커 역할을 할 기회를 늘림.
+#
+# 실행: fio scripts/workloads/hotcold.fio --directory=$HOME/nvme_mount --output-format=json --output=<file>
+# (--directory가 아래 filename= 앞에 실제 마운트 경로를 붙여줌)
+
+[global]
+ioengine=libaio
+direct=1
+bs=4k
+iodepth=16
+group_reporting=1
+
+[hotcold]
+filename=hotcoldfile
+rw=randwrite
+size=600M
+loops=10
+random_distribution=zoned:60/20:40/80

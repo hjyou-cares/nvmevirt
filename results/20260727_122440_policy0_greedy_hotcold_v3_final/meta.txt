@@ -1,0 +1,7 @@
+timestamp=20260727_122440
+policy=0
+policy_name=greedy
+label=hotcold_v3_final
+workload=hotcold
+disk_condition=fresh_mkfs
+fio_cmd=fio /home/hjyou/nvmevirt/scripts/workloads/hotcold.fio --directory=$HOME/nvme_mount

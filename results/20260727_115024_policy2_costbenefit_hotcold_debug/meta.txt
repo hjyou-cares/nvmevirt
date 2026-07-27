@@ -1,0 +1,7 @@
+timestamp=20260727_115024
+policy=2
+policy_name=costbenefit
+label=hotcold_debug
+workload=hotcold
+disk_condition=fresh_mkfs
+fio_cmd=fio /home/hjyou/nvmevirt/scripts/workloads/hotcold.fio --directory=$HOME/nvme_mount
