@@ -81,6 +81,7 @@ Random·Cost-Benefit 모두 코드 구현 + 로컬에서 "의도대로 동작하
 
 ## 벤치마크 도구 셋업 (fio / filebench)
 전제: `nvmev` 모듈 로드 후 `/dev/nvme0n1`이 존재해야 함.
+**주의 (2026-07-29)**: 이 디바이스명은 로컬 VM 기준(디스크가 NVMeVirt 하나뿐이라 nvme0n1). **서버는 부팅용 NVMe가 이미 nvme0n1을 쓰고 있어서 NVMeVirt 가상 디바이스가 `/dev/nvme1n1`로 잡힘** — 서버에서 아래 명령들을 쓸 때는 항상 `/dev/nvme1n1`로 바꿔 쓸 것 (새 환경에서는 `lsblk`로 먼저 확인).
 
 ### 1. 디스크 포맷 & 마운트 (최초 1회만 mkfs, 이후엔 mount만)
 ```
@@ -164,6 +165,12 @@ sudo chown $USER:$USER ~/nvme_mount
 **주의**: 리로드하면 `gc_policy`가 기본값(0=Greedy)으로 돌아가고 `erase_cnt`도 전부 0으로 초기화됨 — 재실험 시작 전 2번/4번 다시 확인할 것.
 
 **⚠️ 중요 (2026-07-27 발견): 정책 간 비교 실험에서는 정책마다 반드시 이 모듈 리로드 사이클을 처음부터 다시 거칠 것.** `mkfs`만 다시 해서는 부족함 — `cb_clock`(Cost-Benefit용 논리 시계), write pointer, free line list 같은 FTL 내부 상태는 `mkfs`로 안 지워지고 오직 `rmmod`→`insmod`로만 초기화됨. `gc_policy`를 sysfs로만 바꿔가며 이어서 실행하면, 뒤에 도는 정책이 앞 정책이 남긴 물리 상태를 그대로 물려받아 비교가 오염됨 (실제로 이 문제 때문에 첫 3정책 비교 결과가 무효 판정됨, EXPERIMENT_LOG.md 2026-07-27 참고). `insmod` 시 `gc_policy=<N>` 파라미터로 바로 원하는 정책을 줄 수 있음(§2 참고).
+
+**업데이트 (2026-07-29)**: `scripts/run_experiment.sh`가 이 rmmod→insmod(gc_policy 지정)→mkfs→mount 전체를 매 실행마다 자동으로 수행하도록 수정됨 (이전 버전은 sysfs 전환 + mkfs만 했음 — 위 오염 문제가 스크립트 자체에도 남아있던 것을 뒤늦게 발견/수정함). 디바이스 경로와 insmod 파라미터는 `NVME_DEV`/`MEMMAP_START`/`MEMMAP_SIZE`/`NVME_CPUS` 환경변수로 오버라이드 가능 (기본값은 로컬 VM 기준). 서버 실행 예시:
+```
+NVME_DEV=/dev/nvme1n1 MEMMAP_START=16G MEMMAP_SIZE=48G NVME_CPUS=7,8 \
+  ./scripts/run_experiment.sh 0 randwrite6g uniform
+```
 
 **주의 (2026-07-24 발견)**: rmmod→insmod로 모듈을 리로드해도 `~/nvme_mount` 안의 파일(ext4 파일시스템 자체, 실제 파일 데이터)은 그대로 남아있음 — `erase_cnt` 같은 FTL 내부 통계(커널 힙에 매번 새로 할당됨)만 초기화되고, `memmap=`으로 예약된 물리 메모리 영역의 실제 바이트는 module reload로 지워지지 않는 것으로 보임. 정책 간 완전히 깨끗한 상태에서 비교하려면 리로드만으로는 부족하고 `mkfs`를 다시 해야 할 수도 있음 — 최종 벤치마크 설계 시 확인 필요.
 
@@ -256,3 +263,12 @@ awk '$7!=0{sum+=$7; n++; if($7>max) max=$7} END {print "nonzero_blocks="n, "sum=
 - **서버 빌드 성공**: `Kbuild`에서 `CONFIG_NVMEVIRT_SSD` 확인, `make` 에러 없이 빌드됨 — gcc 15 + 커널 6.18 조합에서도 문제 없었음 (gcc-12가 필수는 아니었던 것으로 보임).
 - **서버 부팅 파라미터가 기존 기록과 다름 (해결됨)**: `/proc/cmdline` 확인 결과 `memmap=48G$16G isolcpus=7,8` — CLAUDE.md에 예전부터 적혀있던 `memmap_start=12G memmap_size=36G cpus=14,15`와 불일치해서 발견 당시엔 조교 확인이 필요하다고 판단했음. 이후 사용자가 확인한 **실습 방법 자료**에 `sudo insmod ... memmap_start=16G memmap_size=48G cpus=7,8`로 명시되어 있는 걸 발견 — 실측 `/proc/cmdline`과 정확히 일치해서 확정. (기존 CLAUDE.md의 12G/36G/14,15 값은 PPT 자료 쪽 값으로 추정되며, 이 서버에는 안 맞는 값이었던 것으로 결론.)
 - **다음 할 일**: 확정된 파라미터(`memmap_start=16G memmap_size=48G cpus=7,8`)로 insmod → `/dev/nvme0n1` 생성 확인 → mkfs/mount → 용량 부풀림 현상 재확인(48G memmap이면 이론상 안 나타나야 함) → 정책 3종 완전 리로드 절차로 uniform+hotcold 벤치마크 → CSV 집계 → 그래프/보고서.
+
+## 진행 상황 (2026-07-29 기준)
+- **서버 insmod 성공**: 확정된 파라미터(`memmap_start=16G memmap_size=48G cpus=7,8`)로 insmod 성공.
+- **서버 가상 디바이스는 `/dev/nvme0n1`이 아니라 `/dev/nvme1n1`임 (중요, 반복 주의).** 서버는 자체 부팅/시스템 NVMe가 이미 `/dev/nvme0n1`을 점유하고 있어서, NVMeVirt가 만드는 가상 디바이스는 그다음 번호인 `/dev/nvme1n1`로 잡힘. 로컬 VM(디스크가 NVMeVirt 하나뿐이라 `nvme0n1`)과 다른 부분이라 실수하기 쉬움 — **서버 관련 명령(mkfs/mount/fio --filename 등)은 항상 `/dev/nvme1n1` 기준으로 쓸 것.** 새 환경에서는 `lsblk`로 실제 디바이스명부터 먼저 확인하는 습관 들이기로 함.
+- **용량 부풀림 현상 재확인 결과: 없음(정상)**. `lsblk`/`fdisk -l` 기준 원시 디바이스 용량이 48G memmap 대비 약 44G로 나옴 — 이는 GC용 over-provisioning(스페어 영역)으로 인한 정상적인 감소이며, 로컬 VM(1G memmap)에서 봤던 "block 크기가 32KB보다 작아 반올림되면서 용량이 4배로 뻥튀기되는" 문제와는 무관함 (그 문제는 반대 방향으로, 실제보다 커 보이는 현상이었음). 예상대로 큰 memmap(48G)에서는 목표 block 크기가 32KB보다 커서 반올림 문제가 재현되지 않음을 확인.
+- **`scripts/run_experiment.sh` 버그 발견 및 수정**: 스크립트가 `/dev/nvme0n1`을 하드코딩하고 있었고(서버에서 그대로 쓰면 위 디바이스명 실수가 재발할 뻔함), 정책 전환도 `sysfs`로만 하고 모듈 완전 리로드를 안 하고 있었음(7/27에 발견했던 "정책 간 상태 오염" 문제가 스크립트 자체엔 반영이 안 돼 있었던 것). `NVME_DEV`/`MEMMAP_START`/`MEMMAP_SIZE`/`NVME_CPUS` 환경변수로 디바이스·insmod 파라미터를 오버라이드하도록 고치고, 매 실행마다 `umount→rmmod→insmod(gc_policy=N)→mkfs→mount`를 자동 수행하도록 수정 완료 (§"GC 정책 실험용 커맨드 레퍼런스" 참고).
+- **서버 워크로드 총 쓰기량 재보정 (loops=10 → 250), 캘리브레이션 실측으로 확인**: 로컬 VM 기준으로 잡았던 `uniform` 워크로드의 `loops=10`(총 6GB 랜덤쓰기)을 서버(`NVME_DEV=/dev/nvme1n1 MEMMAP_START=16G MEMMAP_SIZE=48G NVME_CPUS=7,8`)에서 그대로 돌려본 결과(`results/20260729_184907_policy0_greedy_randwrite6g`), `erase_cnt.txt`에 0이 아닌 블록이 단 하나도 없어서 **GC가 전혀 트리거되지 않음**을 확인함. 원인: 서버는 사용 가능 용량이 44.9GB로 로컬 VM(~923M)보다 훨씬 커서, 6GB는 용량의 13%밖에 안 채움. `loops=250`(총 ~146GB, 용량의 약 3.3배)으로 올려서 재실행(`results/20260729_185748_policy0_greedy_calibcheck`)한 결과 `nonzero_blocks=2024 sum=271620 max=161`로 GC가 확실히 여러 번 트리거됨을 확인 — 이 값을 새 캘리브레이션 기준으로 채택하고 `scripts/run_experiment.sh`(uniform)와 `scripts/workloads/hotcold.fio` 양쪽의 `loops`를 250으로 수정함.
+  - **참고**: 이 계산 결과 `nonzero_blocks=2024`는 전체 블록(131072개, 총 블록 개수는 memmap 크기와 무관하게 채널/런/플레인 토폴로지로 고정됨)의 약 1.5%에 불과함 — 로컬 VM 6GB 테스트에서 봤던 ~15%보다 훨씬 낮은 비율. 이유는 서버 블록 하나 용량(~360KB)이 로컬(~32KB)보다 훨씬 커서, 600M 파일 하나를 담는 데 필요한 물리 블록 수 자체가 전체 용량 대비 작은 비중이기 때문 — GC가 그 작은 워킹셋 풀만 계속 재활용하는 것으로 보임(버그 아님). 정책 3종 비교 리포트에 "환경별 erase 분포 형태 차이"로 언급할 만한 포인트.
+- **다음 할 일**: 서버에서 `NVME_DEV=/dev/nvme1n1 MEMMAP_START=16G MEMMAP_SIZE=48G NVME_CPUS=7,8 ./scripts/run_experiment.sh <policy> <label> [uniform|hotcold]`로 정책 3종 × 워크로드 2종 벤치마크 실행(캘리브레이션 완료로 바로 시작 가능) → `collect_summary.sh`로 CSV 집계 → 그래프/보고서 작성 → 제출(7/31 마감, hslee@davinci.snu.ac.kr).

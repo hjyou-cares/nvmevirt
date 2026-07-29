@@ -30,6 +30,10 @@
 #
 # 실행: fio scripts/workloads/hotcold.fio --directory=$HOME/nvme_mount --output-format=json --output=<file>
 # (--directory가 아래 filename= 앞에 실제 마운트 경로를 붙여줌)
+#
+# loops=250 (2026-07-29, 서버 벤치마크용으로 상향): 서버는 SSD 전체 용량이 44.9GB라
+# 로컬 VM 기준으로 잡았던 loops=10(총 6GB, 용량의 13%)로는 GC가 전혀 안 트리거됨.
+# loops=250이면 총 146GB(용량의 약 3.3배)를 써서 GC가 확실히 여러 번 돎.
 
 [global]
 ioengine=libaio
@@ -42,5 +46,5 @@ group_reporting=1
 filename=hotcoldfile
 rw=randwrite
 size=600M
-loops=10
+loops=250
 random_distribution=zoned:60/20:40/80
