@@ -13,7 +13,8 @@
 ## 개발 환경
 - Windows 호스트 → VirtualBox → Ubuntu 22.04 VM (로컬, 구현/빌드용)
 - VS Code + Remote-SSH로 VM에 접속해서 작업
-- 실험 서버: 147.46.241.107 (포트 220), NVMeVirt 세팅: memmap_start=12G memmap_size=36G cpus=14,15
+- 실험 서버: 147.46.241.107 (포트 220), 접속: `ssh hjyoo@147.46.241.107 -p 220` (비밀번호 인증, VPN 불필요, 2026-07-28 접속 성공 확인). 호스트네임 `Z690-AORUS-ELITE-AX-DDR4`.
+- **서버 NVMeVirt 파라미터 정정 (2026-07-28, 확정)**: 예전에 여기 적혀있던 `memmap_start=12G memmap_size=36G cpus=14,15`는 틀림 — PPT 자료에 있던 값으로 추정되나 실제와 다름. **올바른 값은 `memmap_start=16G memmap_size=48G cpus=7,8`**: 실습 방법 자료(별도 문서)에 이 값으로 명시되어 있고, 서버 실측 `/proc/cmdline`(`memmap=48G$16G isolcpus=7,8`)과도 정확히 일치해서 확정함. `intremap=off`는 커맨드라인에 없음(불필요한 것으로 보임). `insmod` 시 이 값 사용할 것.
 - 저장소: GitHub fork `hjyou-cares/nvmevirt` (upstream: `snu-csl/nvmevirt`)
 - **주의**: 이 fork를 로컬 VM 외에 다른 환경(서버 등)에서도 건드리고 있어서 origin에 로컬에 없는 커밋이 먼저 들어와 있던 적 있음 (2026-07-23, `CONFIG_NVMEVIRT_ZNS` 커밋). 작업 시작 전 `git fetch`/`git pull`로 동기화 확인 습관 들일 것.
 - **평일엔 연구실 컴퓨터, 주말엔 집 컴퓨터로 작업** (2026-07-26부터). 둘 다 "로컬 VM, memmap_start=2G memmap_size=1G cpus=2,3" 컨셉은 같지만 별도로 프로비저닝된 환경이라 설치 패키지/상태가 다를 수 있음 — 새 컴퓨터에서 작업 시작 전엔 모듈 로드 여부, 마운트 여부, fio/filebench 설치 여부부터 확인할 것 (2026-07-26 집 컴퓨터에서 fio 미설치 + VM 재부팅으로 ext4 사라짐 두 가지를 겪음, 아래 "진행 상황 (2026-07-26 기준)" 참고).
@@ -67,7 +68,7 @@ NVMeVirt의 Conventional FTL(`conv_ftl.c`)에서 GC victim 선택 정책 3가지
 
 ### 서버 벤치마크 전 남은 작업 (2026-07-23 작성, 2026-07-27 갱신)
 Random·Cost-Benefit 모두 코드 구현 + 로컬에서 "의도대로 동작하는지" 검증까지는 끝났지만, 그건 기능 검증이지 본 벤치마크가 아님. 서버로 넘어가기 전 아래를 같이 준비해야 함:
-1. **서버 환경 자체 재확인 — 아직 미착수, 현재 블로커**: Kbuild가 서버에서도 `CONFIG_NVMEVIRT_SSD`인지, 빌드가 정상인지, 로컬 VM에서 겪은 "작은 memmap일 때 용량 4배 부풀림" 현상이 서버(36G)에서도 있는지 처음부터 확인 필요 (이론상 서버는 이 문제가 없을 것으로 추정했지만 미검증). **2026-07-27: 로컬 VM에서 `ssh -p 220 <?>@147.46.241.107` 접속 시도 시 연결 타임아웃 — 사용자명/VPN 필요 여부/인증 방식 확인 중, 미해결 (EXPERIMENT_LOG.md "이슈" 참고).**
+1. **서버 환경 자체 재확인 — 진행 중 (2026-07-28)**: SSH 접속 성공(`ssh hjyoo@147.46.241.107 -p 220`, 비밀번호 인증, VPN 불필요 — 7/27 타임아웃은 사용자명 문제였던 것으로 추정). 저장소 클론 완료(`~/nvmevirt`), 로컬에 밀려있던 미푸시 커밋(`c194a5d`) push 후 서버에서 pull 완료. `Kbuild`에서 `CONFIG_NVMEVIRT_SSD` 확인됨. `make` 빌드 성공 — 서버 gcc(15.2.0, gcc-12는 미설치)/커널(6.18.0-9-generic) 조합에서도 에러 없음. **아직 남은 것**: `/proc/cmdline` 실측 결과 memmap 파라미터가 기존 기록과 달라서(위 "개발 환경" 섹션 참고) 조교 확인 대기 중 — insmod는 아직 안 함. 확인 후 insmod → "작은 memmap일 때 용량 4배 부풀림" 현상이 이 서버(48G)에서도 있는지 재확인 필요.
 2. ~~**Latency 측정 방법론 설계**~~ → **완료 (2026-07-26/27)**: `run_experiment.sh`가 fio를 `--output-format=json`으로 실행하고, `collect_summary.sh`가 `fio.json`의 `write.lat_ns.mean`(IO AVG)과 `write.clat_ns.percentile["99.000000"]`(p99 tail latency)를 jq로 추출해서 CSV에 포함함. 실습 과제의 "호스트 IO AVG, Tail Latency" 요구사항이 이 두 값으로 충족됨.
 3. ~~**재현 가능한 실험 설계**~~ → **완료 (2026-07-27)**: 아래 5번 항목의 mkfs 문제에 더해, **정책 비교 시 정책마다 모듈을 완전히 리로드(`rmmod`→`insmod`)해야 한다**는 게 새로 밝혀짐 — `mkfs`는 파일시스템만 초기화하고 FTL 내부 상태(`cb_clock`, write pointer, free line list)는 안 지우기 때문. 최종 절차: 정책마다 `umount→rmmod→insmod(해당 gc_policy로)→run_experiment.sh`. 자세한 경위는 EXPERIMENT_LOG.md 2026-07-27 항목 참고.
 4. ~~**결과 저장 파이프라인**~~ → **완료 (2026-07-26)**: `scripts/run_experiment.sh <policy> <label> [workload]` (정책 전환→umount/mkfs/mount→reset→fio json 출력→erase_cnt 덤프→summary 생성까지 한 번에) + `scripts/collect_summary.sh` (`results/` 전체를 CSV로 집계, latency는 fio json에서 jq로 추출)로 구현. 로컬 컴퓨터에서 Greedy로 1회 실측 검증 완료(`results/20260726_220135_policy0_greedy_pipelinetest`), 파일 4종(`fio.json`/`erase_cnt.txt`/`meta.txt`/`summary.txt`) 정상 생성 및 집계 확인. **2026-07-27 업데이트**: `workload` 파라미터(uniform/hotcold) 추가, 매 실행마다 `umount→mkfs→mount→chown`으로 완전히 새 파일시스템에서 시작하도록 변경(아래 5번과 연계).
@@ -155,7 +156,7 @@ conv_ftl.c 수정 후 재실험할 때 반복하는 명령어 모음.
 sudo umount ~/nvme_mount
 sudo rmmod nvmev
 make                                    # Kbuild가 CONFIG_NVMEVIRT_SSD := y 인지 확인할 것
-sudo insmod ./nvmev.ko memmap_start=2G memmap_size=1G cpus=2,3   # 로컬 VM 값. 서버는 memmap_start=12G memmap_size=36G cpus=14,15
+sudo insmod ./nvmev.ko memmap_start=2G memmap_size=1G cpus=2,3   # 로컬 VM 값. 서버는 memmap_start=16G memmap_size=48G cpus=7,8 (2026-07-28 확정, 위 "개발 환경" 섹션 참고)
 sudo mount /dev/nvme0n1 ~/nvme_mount
 sudo chown $USER:$USER ~/nvme_mount
 ```
@@ -247,3 +248,11 @@ awk '$7!=0{sum+=$7; n++; if($7>max) max=$7} END {print "nonzero_blocks="n, "sum=
   Latency는 avg/p99에서 Greedy와 CB 우열이 엇갈리고, 직전 실행(printk 오버헤드 있던 상태)과 비교해도 p99가 뒤바뀜 — 반복측정을 안 해서 노이즈인지 실제 경향인지 미확정. 사용자 판단으로 반복측정은 생략하고 서버 벤치마크로 넘어가기로 함.
 - **서버 접속 시도, 미해결**: `ssh -p 220 <?>@147.46.241.107`을 로컬 VM에서 시도했으나 연결 타임아웃. 사용자명/VPN 필요 여부/인증 방식(비밀번호 vs 키) 확인이 필요한 상태 — 다음 세션에서 이어서 진행할 것. 지금까지 서버 관련 작업(§1의 `memmap_start=12G memmap_size=36G cpus=14,15`)은 전부 미검증 상태임을 유의.
 - **다음 할 일**: 서버 환경 확인(Kbuild, 빌드, 용량 부풀림 현상 재확인) → 서버에서 오늘 확정한 절차(정책마다 완전 리로드, uniform+hotcold 워크로드)로 최종 벤치마크 → `collect_summary.sh`로 CSV 집계 → 그래프 작성 → 보고서 작성 → 제출(hslee@davinci.snu.ac.kr, 7/31까지).
+
+## 진행 상황 (2026-07-28 기준)
+- **서버 SSH 접속 성공, 7/27 블로커 해결**: `ssh hjyoo@147.46.241.107 -p 220` + 비밀번호 인증으로 바로 접속됨 (VPN 불필요). 7/27 타임아웃은 사용자명을 몰라서 생긴 문제였던 것으로 추정(원인 확정은 안 함). 호스트네임 `Z690-AORUS-ELITE-AX-DDR4`.
+- **서버 빌드 환경 확인**: gcc 15.2.0(Ubuntu 15.2.0-11ubuntu1), `gcc-12`는 미설치. 커널 `6.18.0-9-generic`, 빌드 헤더는 `/lib/modules/6.18.0-9-generic/build`에 정상 존재.
+- **저장소 동기화 문제 재발 및 해결**: 서버에 `~/nvmevirt`를 새로 클론했더니 `b4c8c4f`(7/26 커밋)까지만 있었음 — 로컬(연구실/집 컴퓨터)에서 만든 최신 커밋 `c194a5d`(7/27 hotcold v3 재설계 + cross-policy 오염 수정)가 origin에 안 올라가 있었던 것. `git push`로 반영 후 서버에서 `git pull`. CLAUDE.md에 이미 있던 "여러 환경에서 작업 시 동기화 확인" 경고가 또 재현된 사례 — **앞으로 서버 작업 시작 전엔 로컬에서 먼저 unpushed 커밋 있는지(`git log origin/main..HEAD`) 확인하는 습관 들일 것.**
+- **서버 빌드 성공**: `Kbuild`에서 `CONFIG_NVMEVIRT_SSD` 확인, `make` 에러 없이 빌드됨 — gcc 15 + 커널 6.18 조합에서도 문제 없었음 (gcc-12가 필수는 아니었던 것으로 보임).
+- **서버 부팅 파라미터가 기존 기록과 다름 (해결됨)**: `/proc/cmdline` 확인 결과 `memmap=48G$16G isolcpus=7,8` — CLAUDE.md에 예전부터 적혀있던 `memmap_start=12G memmap_size=36G cpus=14,15`와 불일치해서 발견 당시엔 조교 확인이 필요하다고 판단했음. 이후 사용자가 확인한 **실습 방법 자료**에 `sudo insmod ... memmap_start=16G memmap_size=48G cpus=7,8`로 명시되어 있는 걸 발견 — 실측 `/proc/cmdline`과 정확히 일치해서 확정. (기존 CLAUDE.md의 12G/36G/14,15 값은 PPT 자료 쪽 값으로 추정되며, 이 서버에는 안 맞는 값이었던 것으로 결론.)
+- **다음 할 일**: 확정된 파라미터(`memmap_start=16G memmap_size=48G cpus=7,8`)로 insmod → `/dev/nvme0n1` 생성 확인 → mkfs/mount → 용량 부풀림 현상 재확인(48G memmap이면 이론상 안 나타나야 함) → 정책 3종 완전 리로드 절차로 uniform+hotcold 벤치마크 → CSV 집계 → 그래프/보고서.
