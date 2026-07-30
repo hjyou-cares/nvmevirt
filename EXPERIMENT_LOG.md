@@ -189,6 +189,75 @@
 - raw 로그 경로: `results/20260727_122440_policy0_greedy_hotcold_v3_final/`, `results/20260727_122513_policy1_random_hotcold_v3_final/`, `results/20260727_122725_policy2_costbenefit_hotcold_v3_final/`
 - 비고: 스큐를 완화(v2의 80/10 → v3의 60/20)해서 vpc 분포는 실제로 넓게 퍼졌지만(printk로 확인, vpc=1 샘플이 194→41개로 감소) erase_sum/max는 여전히 Greedy와 CB가 동일. nonzero_blocks는 이번엔 조금 더 벌어짐(25260 vs 25272) — CB가 실제로 다른 블록을 고르지만 총량 지표엔 수렴한다는 결론. Latency는 이번 실행에서 avg는 CB가 더 낮고(89.0 vs 92.9) p99는 오히려 CB가 더 높음(216.1 vs 197.6) — 직전 v3_debug 실행(printk 오버헤드 있음, avg 89.3/p99 207.9)과 p99 우열이 뒤바뀜. **반복측정 안 한 1회성 값이라 latency 우열은 노이즈일 가능성이 있음. 사용자 판단으로 반복측정은 생략하고 서버 벤치마크로 넘어가기로 함.**
 
+### 2026-07-30 13:11~13:19 — 정책: Greedy / Random / Cost-Benefit × uniform/hotcold(v3) 공식 서버 벤치마크 ("final")
+- 커맨드: `NVME_DEV=/dev/nvme1n1 MEMMAP_START=16G MEMMAP_SIZE=48G NVME_CPUS=7,8 ./scripts/run_experiment.sh <0|1|2> final <uniform|hotcold>` (uniform은 `loops=250` 6GB→146GB 랜덤쓰기, hotcold는 이 시점까지의 v3 워크로드: 단일파일+`zoned:60/20:40/80`, size=600M/loops=250 고정값)
+- 대상: 서버, 정책마다 완전 모듈 리로드
+- 결과 요약 (`results/summary_final.csv`):
+
+  | 정책 | workload | nonzero_blocks | erase sum | erase max | lat avg(ns) | lat p99(ns) |
+  |---|---|---|---|---|---|---|
+  | Greedy | uniform | 2016 | 271620 | 161 | 34557.3 | 67072 |
+  | Cost-Benefit | uniform | 2004 | 271620 | 161 | 34794.1 | 68096 |
+  | Random | uniform | 114804 | 273384 | 9 | 34715.7 | 67072 |
+  | Greedy | hotcold | 2568 | 271624 | 150 | 37979.8 | 78336 |
+  | Cost-Benefit | hotcold | 2568 | 271624 | 153 | 37965.96 | 78336 |
+  | Random | hotcold | 115048 | 276120 | 9 | 38321.1 | 78336 |
+
+- raw 로그 경로: `results/20260730_131136_policy0_greedy_final/` 등 (`summary_final.csv` 참고)
+- 비고: uniform·hotcold 둘 다 Greedy/Cost-Benefit의 erase 통계가 사실상 완전히 동일 — 이날 오후 내내 이어진 "왜 수렴하는가" 조사(아래 항목들 및 "이슈" 2026-07-30 참고)의 출발점이 된 결과. **이 hotcold latency 수치는 나중에(같은 날) `jobs[0]`이 `cold_fill` 구간을 가리키는 버그가 있었다는 게 밝혀짐 — v3는 job이 하나뿐이라 이 버그의 영향은 없음(uniform도 마찬가지), 영향받는 건 v5 이후 멀티job 워크로드부터.**
+
+### 2026-07-30 14:19~14:24 — 정책: Greedy / Random / Cost-Benefit (hotcold v4, `HOTCOLD_SIZE=24G HOTCOLD_LOOPS=6`, "final2")
+- 커맨드: `./scripts/run_experiment.sh <0|1|2> final2 hotcold` (v4: v3와 동일 구조, size/loops만 파라미터화)
+- 결과 요약: Greedy `76760/266012/5`, Random `122596/364636/11`, Cost-Benefit `76408/266012/5` — Greedy/CB가 이번에도 완전히 수렴 (sum/max 동일).
+- raw 로그 경로: `results/20260730_141921_policy0_greedy_final2/` 등
+- 비고: "final"보다 부하를 3.2배(144G)로 강하게 줬는데도 수렴 지속.
+
+### 2026-07-30 15:03~15:09 — 정책: Greedy / Random / Cost-Benefit (hotcold v4, 약한 부하, "weakcalib")
+- 커맨드: `./scripts/run_experiment.sh <0|1|2> weakcalib hotcold` (`HOTCOLD_SIZE=24G HOTCOLD_LOOPS=2`, 총 48G ≈ 용량의 1.07배 — 용량을 살짝만 넘기는 수준으로 약화)
+- 결과 요약: Greedy `3864/3864/1`, Random `5200/5308/3`, Cost-Benefit `3864/3864/1` — **Greedy/CB가 nonzero_blocks·sum·max 전부 정확히 일치.**
+- raw 로그 경로: `results/20260730_145229_policy0_greedy_weakcalib/`(최초 시도, sudo 인증 실패로 빈 폴더만 남음), `results/20260730_150336_policy0_greedy_weakcalib/`, `results/20260730_150833_policy1_random_weakcalib/`, `results/20260730_150934_policy2_costbenefit_weakcalib/`
+- 비고: 부하를 강하게(final2, 3.2배)도 약하게(1.07배)도 바꿔봤지만 Greedy/CB 수렴은 그대로 — "부하 강도 조절로 해결된다"는 가설 기각.
+
+### 2026-07-30 15:17~15:29 — 정책: Greedy / Random / Cost-Benefit (hotcold v5, 물리적 시간 분리, "v5calib")
+- 커맨드: `./scripts/run_experiment.sh <0|1|2> v5calib hotcold` (`COLD_SIZE=30G COLD_TOUCH_SIZE=3G HOT_SIZE=1G HOT_LOOPS=100`, stonewall 3단계)
+- 결과 요약: Greedy `3144/234816/79`, Random `47108/235796/14`, Cost-Benefit `3164/234816/79` — sum/max 완전 일치, nonzero_blocks만 0.6% 차이.
+- raw 로그 경로: `results/20260730_151730_policy0_greedy_v5calib/`, `results/20260730_152748_policy1_random_v5calib/`, `results/20260730_152925_policy2_costbenefit_v5calib/`
+- 비고: 마모 분포 자체는 v3/v4와 완전히 다르게(작은 핫 영역에 극도로 집중) 나왔지만 Greedy/CB 수렴은 여전.
+
+### 2026-07-30 15:40~15:46 — 정책: Greedy / Random / Cost-Benefit (hotcold v6, 병렬 실행, "v6calib")
+- 커맨드: `./scripts/run_experiment.sh <0|1|2> v6calib hotcold` (`COLD_TOUCH_SIZE`를 15G로 키우고 `hot_churn`과 병렬 실행)
+- 결과 요약: Greedy `37660/275684/86`, Random `89296/330464/14`, Cost-Benefit `38864/277572/86` — erase max는 여전히 정확히 일치(86/86), nonzero_blocks 차이가 3.2%로 조금 커짐.
+- raw 로그 경로: `results/20260730_154032_policy0_greedy_v6calib/`, `results/20260730_154351_policy1_random_v6calib/`, `results/20260730_154556_policy2_costbenefit_v6calib/`
+- 비고: 이 결과를 계기로 "정말 항상 같은 선택을 하는가"를 직접 확인하기 위해 `conv_ftl.c`에 진단 printk 추가 결정 (아래 참고).
+
+### 2026-07-30 16:01 — printk 진단 1차 (hotcold v6, "diag")
+- 커맨드: `./scripts/run_experiment.sh 0 diag hotcold` (진단 코드 포함 빌드, 정책 번호는 무의미 — 진단은 활성 정책과 무관하게 둘 다 계산)
+- 결과 요약: `dmesg`에서 `total=69000, diverge=9995`(14.5%) — 그러나 시간순 추이를 보면 `total=500`에서 `diverge=500`(100%)로 시작해 `total=11500`에서 `diverge=9995`(87%)에 도달한 뒤, 나머지 `total=69000`까지(전체의 83%) **단 한 번도 추가로 갈리지 않음**(`diverge` 값이 그대로 고정).
+- raw 로그 경로: `results/20260730_160110_policy0_greedy_diag/` (erase 통계: `40156/276656/86`), 진단 로그: `~/nvmevirt/gc_diag.log`(당시 스냅샷, 이후 v7 결과로 덮어씀)
+- 비고: **Cost-Benefit이 실제로 Greedy와 다른 line을 고른다는 걸 최초로 직접 확인.** 다만 divergence가 실행 초반 16.7% 구간에서만 발생 — `cold_touch`(15G)가 `hot_churn`(100G)보다 먼저 끝나서 그 이후로는 콜드 후보 공급이 끊기기 때문으로 추정 (fio.json의 `cold_touch` 그룹 runtime=64643ms 중 divergence는 처음 ~11~16s 구간에 몰림). → v7 재설계로 이어짐.
+
+### 2026-07-30 16:14~16:22 — 정책: Greedy / Random / Cost-Benefit (hotcold v7, time_based 90초, "diag7"/"v7")
+- 커맨드: `./scripts/run_experiment.sh <0|1|2> <diag7|v7> hotcold` (`COLD_SIZE=30G COLD_TOUCH_SIZE=15G HOT_SIZE=1G HOTCOLD_RUNTIME=90`, `cold_touch`/`hot_churn`이 90초간 동일하게 계속 실행)
+- 진단 재확인: `total=101000, diverge=93915`(93%) — 마지막 측정 시점까지도 계속 증가 중(플래토 없음), divergence가 실행 끝까지 유지됨 확인.
+- 결과 요약 (raw):
+
+  | 정책 | nonzero_blocks | erase sum | erase max | 90초간 처리량(cold_touch+hot_churn, GiB) |
+  |---|---|---|---|---|
+  | Greedy | 85916 | 405864 | 11 | 132.32 |
+  | Cost-Benefit | 89436 | 401248 | 8 | 131.16 |
+  | Random | 86632 | 294720 | 11 | 72.26 |
+
+  Random의 90초간 처리량이 Greedy/CB의 절반 수준이라(GC 오버헤드로 처리량 저하 추정) sum을 그대로 비교하면 불공정 → **총 쓴 데이터량(cold_fill 30GiB 포함) 대비 GB당 erase 횟수로 정규화**:
+
+  | 정책 | 총 쓴 데이터(GiB) | erases/GiB |
+  |---|---|---|
+  | Greedy | 162.30 | 2500.6 |
+  | Cost-Benefit | 161.14 | **2490.0** |
+  | Random | 102.25 | **2882.4** |
+
+- raw 로그 경로: `results/20260730_161454_policy0_greedy_diag7/`, `results/20260730_162007_policy2_costbenefit_v7/`, `results/20260730_162220_policy1_random_v7/`, 진단 로그: `~/nvmevirt/gc_diag.log`
+- 비고: **드디어 정책 간 실질적 차이 확인.** Cost-Benefit이 Greedy보다 GB당 erase가 약간 더 적고(0.4%↓), erase max는 뚜렷하게 낮음(8 vs 11)에 nonzero_blocks는 더 많음(89436 vs 85916) — 더 많은 블록에 걸쳐 더 고르게 마모시키면서 전체 효율은 비슷하거나 더 낫다는, Cost-Benefit GC의 이론적 이점과 부합하는 패턴. Random은 정규화하면 확실히 가장 나쁨(2882.4 vs ~2495) — write amplification이 가장 큼. **다음 세션 할 일: 이 결과를 반복측정으로 노이즈 여부 확인, 진단 printk 제거 후 클린 빌드로 최종 재확인, uniform도 동일 방법론(정규화 포함)으로 재점검할지 결정.**
+
 ---
 
 ## 이슈 / 막힌 점
@@ -267,6 +336,36 @@
 - 원인: 콜드파일을 한 번도 다시 안 건드리면 그 line들은 계속 100% valid로 남아서 `advance_write_pointer()`가 `full_line_list`로 보내고 victim pqueue엔 아예 안 들어감(`mark_page_invalid()`가 애초에 호출 안 됨) — Cost-Benefit이 age를 계산할 후보 자체가 전부 "핫" line뿐이라 age 편차가 생길 여지가 없었음(printk 실측: age 변동폭 약 1%).
 - 해결: `hotcold.fio`를 v2로 재설계 — 콜드 영역도 낮은 빈도로나마 덮어써지도록 `random_distribution=zoned`로 접근 빈도 자체를 스큐(하나의 파일 안에서 처리).
 
+### 2026-07-30
+- 무엇을: `scripts/collect_summary.sh`의 latency 추출을 `jobs[0]`에서 `jobs[-1]`(마지막 job/그룹)으로 변경.
+- 왜: hotcold 워크로드가 v5부터 fio job을 여러 개(cold_fill/cold_touch/hot_churn)로 나누면서, `group_reporting` 하에서는 `jobs[0]`이 콜드파일 순차쓰기(`cold_fill`) 구간을 가리키게 됨 — GC 부하가 실제로 걸리는 마지막 job(그룹)이 아니라 사실상 무관한 구간의 latency를 재고 있었던 것. uniform 워크로드는 job이 하나뿐이라 `jobs[-1]==jobs[0]`이라 영향 없음.
+- 커밋: (미커밋)
+
+### 2026-07-30
+- 무엇을: `scripts/workloads/hotcold.fio`를 v5로 재설계 — `stonewall` 3단계(`cold_fill`: 콜드파일 크게 1회 순차쓰기 → `cold_touch`: 그중 일부만 랜덤 재기록 → `hot_churn`: 작은 핫파일 반복 재기록)로 콜드/핫을 물리적·시간적으로 분리. `scripts/run_experiment.sh`에 `COLD_SIZE`(기본 30G)/`COLD_TOUCH_SIZE`(기본 3G)/`HOT_SIZE`(기본 1G)/`HOT_LOOPS`(기본 100) 환경변수 추가.
+- 왜: v1~v4는 hot/cold를 한 파일 안에서 접근 빈도로만 나눠서, 로그 구조 FTL 특성상 같은 물리 line에 hot/cold 페이지가 뒤섞여 vpc와 age가 강하게 상관됨 — Greedy/CB가 항상 같은 순서로 후보를 매기는 근본 원인으로 지목됨.
+- 검증: 서버에서 Greedy 단독 실행(v5calib) 결과 `nonzero_blocks=3144 sum=234816 max=79` — 마모가 작은 핫 영역에 집중되는 정성적으로 다른 분포 확인. 다만 Greedy/CB 비교는 여전히 수렴 (아래 "이슈" 2026-07-30 항목 참고).
+- 커밋: (미커밋)
+
+### 2026-07-30
+- 무엇을: `hotcold.fio`를 v6로 재설계 — `hot_churn`의 `stonewall`을 제거해서 `cold_touch`와 같은 그룹에서 병렬 실행. `COLD_TOUCH_SIZE` 기본값을 3G→15G로 키움.
+- 왜: v5는 `cold_touch`(3G)가 `hot_churn`(100G) 시작 전에 순차적으로 다 끝나버려서, 콜드 후보가 초반에만 반짝 존재하고 대부분의 실행 시간 동안은 핫 후보끼리만 경쟁하게 됨 — 콜드/핫 후보가 GC 전 구간에 걸쳐 동시에 존재해야 age가 타이브레이커로 작동할 기회가 생긴다는 판단.
+- 검증: v6calib 결과 Greedy `37660/275684/86` vs Cost-Benefit `38864/277572/86` — v5보다 nonzero_blocks 차이는 조금 커졌지만(0.6%→3.2%) erase max는 여전히 정확히 일치. 부분적 개선에 그침 (아래 "이슈" 항목에서 printk로 근본 원인 규명).
+- 커밋: (미커밋)
+
+### 2026-07-30
+- 무엇을: `conv_ftl.c`의 `select_victim_line()`에 임시 진단 함수 `diag_compare_victims()` 추가 (전역 카운터 `diag_gc_total`/`diag_gc_diverge`). 활성 `gc_policy`와 무관하게 pqueue 원본 배열(`pq->d[]`)에서 Greedy 최적 후보(min vpc)와 Cost-Benefit 최적 후보(max bc, vpc==0 가드 동일 적용)를 각각 독립적으로 계산해서 서로 다른 line을 고르는지 매 GC 판정마다 비교, 처음 50건은 상세 printk, 이후엔 500건마다 누적 카운트만 printk. pq 상태를 변경하지 않는 read-only 코드.
+- 왜: v5/v6에서 erase 총량 지표가 계속 수렴하는 게 "두 정책이 실제로 항상 같은 line을 고르기 때문"인지 "다르게 고르는데 집계에 안 드러나는 것"인지 추측만으로는 구분이 안 됐음.
+- 검증: 로컬(비-nvme 디렉토리)에서 문법 확인 후 서버에서 빌드/insmod, hotcold v6/v7 워크로드로 dmesg 진단 로그 확보 (자세한 결과는 "벤치마크 실행 로그"/"이슈" 2026-07-30 항목 참고).
+- **주의**: 최종 제출 전 이 진단 코드(`diag_compare_victims`, `diag_gc_total`, `diag_gc_diverge`와 `select_victim_line()`의 호출부)를 제거하고 클린 빌드로 재확인할 것.
+- 커밋: (미커밋)
+
+### 2026-07-30
+- 무엇을: `hotcold.fio`를 v7로 재설계 — `cold_touch`/`hot_churn` 둘 다 `size`+`loops` 기반에서 `time_based=1`+동일 `runtime`(환경변수 `HOTCOLD_RUNTIME`, 기본 90초)으로 변경.
+- 왜: v6는 `cold_touch`(15G)가 `hot_churn`(100G)보다 훨씬 먼저 끝나서(진단 printk로 실측: 전체 GC 판정의 16.7%에서만 두 정책이 갈리고 나머지 83%는 완전히 일치), divergence가 생기는 구간 자체가 짧아 집계에 안 드러남. 둘 다 같은 시간 동안 돌게 하면 크기 차이와 무관하게 끝까지 겹침.
+- 검증: 진단 로그 상 `total=101000, diverge=93915`(93%)로 끝까지 divergence 유지 확인. 실제 3정책 비교에서도 이번엔 erase 통계가 달라짐 (다만 `time_based`라 정책별 처리량이 달라지는 새 변수 발생 — GB당 정규화 필요, "이슈" 2026-07-30 항목 참고).
+- 커밋: (미커밋)
+
 ### 2026-07-27
 - 증상: v2(`zoned:80/10:20/90`)로 재설계한 뒤에도 Greedy와 Cost-Benefit의 erase_sum/max가 여전히 동일.
 - 원인: 스큐가 너무 강해서 핫 영역이 극도로 빨리 재기록되며 vpc가 매우 작은(거의 다 무효화된) 후보가 GC 후보 풀에 항상 대기 중이었음(printk 실측: vpc=1~6 구간이 전체 샘플의 46%). `bc=ipc*age/(2*vpc)` 수식은 vpc가 작을수록 다른 항을 압도하므로, 이런 후보가 항상 있으면 age가 아무리 벌어져도 CB가 Greedy와 동일한 선택을 하게 됨.
@@ -276,3 +375,17 @@
 - 증상: 서버(147.46.241.107, 포트 220) SSH 접속 시도 시 연결 타임아웃.
 - 원인: 미확인 — VPN/캠퍼스 네트워크가 필요하거나, 로컬 VM에서 서버로 직접 못 나가는 네트워크 구성일 가능성. 사용자에게 정확한 접속 방법(사용자명, VPN 필요 여부, 인증 방식)을 확인 요청한 상태.
 - 해결: 미해결, 다음 세션에서 이어서 진행.
+
+### 2026-07-30
+- 증상: Claude Code Bash 툴로 `run_experiment.sh`(sudo 필요)를 자동 실행하려 하니 `sudo: Authentication failed`가 3연속 뜨며 실패. 사용자가 자기 터미널에서 미리 `sudo -v`를 해뒀는데도 안 먹힘.
+- 원인: `tty` 확인 결과 Bash 툴 세션은 "not a tty"(non-interactive) — sudo의 인증 타임스탬프 캐시는 tty별로 분리되어 있어서, 사용자의 인터랙티브 터미널에서 캐시해둔 인증이 Bash 툴의 별도 세션에는 전혀 적용되지 않음. 2026-07-23에 이미 "인터랙티브 터미널이 없어서 sudo 실패" 이슈가 있었지만, 이번엔 "사용자가 미리 sudo -v를 해두면 우회되지 않을까"를 시도해보다 재확인된 것.
+- 해결: 여전히 동일한 원칙 적용 — sudo가 필요한 명령(`run_experiment.sh` 등)은 Claude가 정확한 명령어만 만들어 제시하고, 사용자가 자기 터미널에서 직접 실행 → 결과 파일만 Claude가 읽어서 분석. `sudo -v` 선행 자체는 Bash 툴에 도움 안 됨(불필요).
+
+### 2026-07-30 (핵심 이슈, 하루 종일 조사)
+- 증상: `final`(uniform+hotcold v3) 3정책 공식 비교에서 Greedy와 Cost-Benefit의 erase 통계(`nonzero_blocks`/`sum`/`max`)가 사실상 동일하게 나옴. 이후 워크로드를 4번 재설계(v4 파라미터화 → v5 물리적 시간분리 → v6 병렬실행 → v7 time_based)하고 부하 강도를 3.2배~1.07배까지 바꿔봐도, `erase_max`가 계속 정확히 일치(v5: 79/79, v6: 86/86)하는 등 좀처럼 안 갈림.
+- 1차 원인 가설(구조적 상관): `victim_line_get_pri()`가 vpc==0인 line은 age 계산 없이 무조건 최우선 victim으로 처리하도록 가드돼 있어서(2026-07-24 구현), 워크로드가 강하면 후보 대부분이 이런 "공짜 승리" line이 되어 두 정책이 항상 합의해버림 + 로그 구조 FTL 특성상 line의 vpc와 age가 자연히 상관되어(오래된 line일수록 무효화될 시간도 길었으므로) 실제 경쟁 상황 자체가 잘 안 만들어짐.
+- 검증 방법: 위 가설만으로는 "정말 항상 같은 걸 고르는지 vs 다르게 고르는데 통계에 안 드러나는지" 구분이 안 돼서, `conv_ftl.c`의 `select_victim_line()`에 임시 진단 함수(`diag_compare_victims()`, 2026-07-30 추가 — 실제 활성 `gc_policy`와 무관하게 pqueue 원본 데이터에서 Greedy 최적(min vpc)과 Cost-Benefit 최적(max bc)을 각각 독립 계산해서 서로 다른지 매 GC 픽마다 비교/카운트하는 read-only printk 코드)를 추가해서 직접 실측.
+- **진짜 원인 (v6 워크로드로 진단)**: Cost-Benefit은 실제로 다른 line을 고름 — 실행 초반 11500번(전체 GC 판정의 16.7%) 동안은 최대 87%까지 Greedy와 다르게 골랐음. 그런데 `cold_touch`(15G)가 `hot_churn`(100G)보다 훨씬 먼저 끝나버려서(병렬 실행이지만 크기 차이로 인해), 그 이후 83%는 콜드 후보 공급이 끊겨 핫 line끼리만 경쟁 → 거기서부턴 100% 일치. **집계 통계가 수렴해 보였던 건 정책이 실제로 같은 선택을 해서가 아니라, "다르게 고르는 17% 구간"이 "완전히 똑같이 고르는 83% 구간"에 파묻혀서였음.**
+- 해결: `hotcold.fio`를 v7로 재설계 — `cold_touch`/`hot_churn` 둘 다 `size` 기반 대신 `time_based=1`+동일 `runtime`(기본 90초)으로 바꿔서 콜드 후보가 실행 시간 내내 끊이지 않고 공급되도록 함. 재진단 결과 divergence가 실행 끝까지 유지됨(`total=101000, diverge=93915`, 93% — 한 번도 멈추지 않음).
+- 2차 발견 (정규화 필요성): v7로 실제 3정책을 비교하니 이번엔 erase 통계가 달랐지만(Greedy `sum=405864`, CB `sum=401248`, Random `sum=294720`), Random의 sum이 가장 낮은 게 이상해서 io_bytes를 확인해보니 **`time_based` 워크로드에서는 정책마다 같은 90초 동안 실제로 처리한 데이터량 자체가 다름**(Random은 GC 오버헤드가 커서 처리량이 절반 수준: Greedy/CB ~161~162GiB vs Random ~102GiB) — 그래서 GB당 erase 횟수로 정규화해야 공정한 비교가 됨. 정규화 결과: Greedy 2500.6/GiB, **Cost-Benefit 2490.0/GiB(약간 더 효율적)**, Random 2882.4/GiB(뚜렷하게 더 나쁨 — 이론과 일치). erase max도 CB(8)가 Greedy/Random(11/11)보다 뚜렷하게 낮아서, **CB가 더 많은 블록(89436 vs 85916)에 걸쳐 더 고르게 마모시키면서 총 효율도 비슷하거나 더 낫다**는, Cost-Benefit GC의 교과서적 이점이 마침내 실측으로 확인됨.
+- 남은 일: 이 v7+정규화 방법론으로 정책 3종 최종 벤치마크 재확정(반복측정으로 노이즈 여부 확인 권장), 진단용 printk(`diag_compare_victims`, `diag_gc_total`, `diag_gc_diverge`)는 최종 제출 전 `conv_ftl.c`에서 제거, uniform 워크로드도 필요시 재점검.

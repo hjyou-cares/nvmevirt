@@ -31,6 +31,20 @@ MEMMAP_START="${MEMMAP_START:-2G}"
 MEMMAP_SIZE="${MEMMAP_SIZE:-1G}"
 NVME_CPUS="${NVME_CPUS:-2,3}"
 MOUNT_DIR="${MOUNT_DIR:-$HOME/nvme_mount}"
+# hotcold 워크로드 전용 (v7, 2026-07-30): 콜드/핫을 물리적으로 분리된 line에
+# 쓰기 위해 cold_fill 이후 cold_touch/hot_churn을 병렬 실행함 (자세한 이유는
+# scripts/workloads/hotcold.fio 상단 주석 참고). v6(size 기반, COLD_TOUCH_SIZE=15G)는
+# printk 진단으로 실제 Greedy/CB 선택이 갈리는 걸 확인했으나, cold_touch가
+# hot_churn보다 훨씬 먼저 끝나버려서(15G vs 100G) 전체 GC 판정의 17%에서만
+# divergence가 나고 나머지 83%는 균일하게 수렴 -> 최종 erase 통계에는 안 드러남.
+# v7은 둘 다 time_based+동일 runtime(HOTCOLD_RUNTIME)으로 바꿔서 콜드 후보가
+# 실행 시간 내내 끊이지 않고 공급되도록 함. 서버(44.9G 용량) 기준 기본값 --
+# 로컬 VM처럼 용량이 훨씬 작은 환경에서는 반드시 오버라이드할 것.
+COLD_SIZE="${COLD_SIZE:-30G}"
+COLD_TOUCH_SIZE="${COLD_TOUCH_SIZE:-15G}"
+HOT_SIZE="${HOT_SIZE:-1G}"
+HOTCOLD_RUNTIME="${HOTCOLD_RUNTIME:-90}"
+export COLD_SIZE COLD_TOUCH_SIZE HOT_SIZE HOTCOLD_RUNTIME
 
 case "$POLICY" in
   0) POLICY_NAME=greedy ;;
@@ -80,7 +94,7 @@ if [ "$WORKLOAD" = "uniform" ]; then
       --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=250 \
       --group_reporting --output-format=json --output="$OUTDIR/fio.json"
 else
-  FIO_CMD="fio $REPO_ROOT/scripts/workloads/hotcold.fio --directory=\$MOUNT_DIR"
+  FIO_CMD="COLD_SIZE=$COLD_SIZE COLD_TOUCH_SIZE=$COLD_TOUCH_SIZE HOT_SIZE=$HOT_SIZE HOTCOLD_RUNTIME=$HOTCOLD_RUNTIME fio $REPO_ROOT/scripts/workloads/hotcold.fio --directory=\$MOUNT_DIR"
   fio "$REPO_ROOT/scripts/workloads/hotcold.fio" --directory="$MOUNT_DIR" \
       --output-format=json --output="$OUTDIR/fio.json"
 fi
@@ -96,6 +110,10 @@ awk '$7!=0{sum+=$7; n++; if($7>max) max=$7} END {print "nonzero_blocks="n, "sum=
   echo "policy_name=$POLICY_NAME"
   echo "label=$LABEL"
   echo "workload=$WORKLOAD"
+  echo "cold_size=$COLD_SIZE"
+  echo "cold_touch_size=$COLD_TOUCH_SIZE"
+  echo "hot_size=$HOT_SIZE"
+  echo "hotcold_runtime=$HOTCOLD_RUNTIME"
   echo "disk_condition=fresh_module_reload_and_mkfs"
   echo "nvme_dev=$NVME_DEV"
   echo "memmap_start=$MEMMAP_START"

@@ -1,39 +1,50 @@
-# 핫/콜드 혼합 워크로드 (2026-07-27 재설계, v2)
+# 핫/콜드 혼합 워크로드 (v6, 2026-07-30) -- 콜드 후보가 GC 전 구간에 걸쳐
+# 계속 공급되도록 cold_touch/hot_churn을 병렬 실행
 #
-# v1(coldfile 500M 1회 쓰기 + hotfile 반복 랜덤쓰기, stonewall)의 문제:
-# 콜드파일을 다시 안 건드리면 그 라인들은 계속 100% valid로 남아서
-# advance_write_pointer()가 full_line_list로 보내고 victim pqueue에는
-# 아예 안 들어감 -> Cost-Benefit이 age를 계산할 후보 자체가 전부 "핫" 라인뿐이라
-# age 편차가 거의 없었음 (printk로 실측: 후보 라인 age가 12669~12799로 변동폭 약 1%).
-# 그 결과 CB의 (ipc*age)/(2*vpc) 계산이 사실상 ipc/vpc(=Greedy의 vpc 기준과 동일 순서)로
-# 수렴해서 Greedy와 거의 동일하게 동작했음.
+# v1~v4 요약 (자세한 실측 수치는 EXPERIMENT_LOG.md 참고):
+# v1: coldfile 1회 쓰기 + hotfile 반복 쓰기(stonewall) -- 콜드 line이 100% valid로
+#     남아 victim pqueue에 아예 안 들어감 -> age 편차 없음.
+# v2/v3: 단일 파일 + random_distribution=zoned로 접근 빈도만 스큐 -- age는 벌어지지만
+#     Greedy/CB의 erase 통계가 계속 수렴함.
+# v4: v3와 동일 구조에서 size/loops만 파라미터화 -- 여전히 수렴 (final2: 둘 다
+#     sum=266012/max=5, weakcalib: 둘 다 sum=3864/max=1로 완전히 동일).
 #
-# v2: 파일 하나에 fio의 random_distribution=zoned로 접근 빈도 자체를 스큐.
-# "쓰기의 80%는 파일 앞 10% 영역(핫)에 몰리고, 20%는 나머지 90% 영역(콜드)에 퍼진다"
-# -> 콜드 영역도 가끔 invalidate되어 pqueue에 들어오되, 핫 영역보다 훨씬 드물게
-# 재기록되므로 실제로 age 차이가 벌어짐. 총 쓰기량(6G)은 로컬 VM에서 GC가
-# 확실히 트리거되는 걸로 확인된 기존 uniform 워크로드와 동일하게 맞춤.
+# v1~v4 공통 근본 원인 (2026-07-30 재분석): FTL은 로그 구조라 쓰는 "시간 순서"대로
+# 물리 line에 순차 배치됨. 단일 파일 안에서 hot/cold를 접근 빈도로만 나누면(v2/v3),
+# hot 페이지와 cold 페이지가 쓰여지는 시점이 뒤섞여 있어서 같은 물리 line 안에
+# hot/cold 페이지가 섞여 들어감 -> line의 vpc와 age가 사실상 강하게 상관되어
+# Greedy(vpc만 봄)와 Cost-Benefit(vpc*age 조합)이 항상 같은 순서로 후보를 매김.
 #
-# v2(80/10)로 돌려본 결과: age는 실제로 크게 벌어졌지만(printk 실측 1,000~1,536,835,
-# 150배 이상 차이) Greedy/CB의 erase_sum·max가 완전히 동일하게 나옴. 원인을 vpc
-# 분포로 확인해보니 vpc=1~6인 후보가 전체 샘플의 46%를 차지 -- 핫 영역이 너무
-# 빨리/자주 재기록되면서 "거의 다 무효화된"(vpc가 매우 작은) 라인이 항상 대기 중이었음.
-# bc=ipc*age/(2*vpc) 수식상 vpc가 작으면 age가 아무리 벌어져도 못 따라잡을 정도로
-# bc가 압도적으로 커지므로, 그런 "압도적으로 좋은" 후보가 항상 있으면 CB도 결국
-# Greedy와 같은 걸 고르게 됨. Cost-Benefit이 실제로 의미를 가지려면 vpc가 비슷한
-# 후보들 사이에서 age로 타이브레이크하는 상황이 나와야 하는데, 스큐가 너무 강하면
-# 그 상황 자체가 잘 안 생김.
+# v5: 콜드와 핫을 "시간대"로도 분리 (stonewall 3단계: cold_fill -> cold_touch ->
+# hot_churn). 서버 실측(v5calib): Greedy/CB가 여전히 완전히 수렴함
+# (둘 다 sum=234816/max=79, nonzero_blocks만 3144 vs 3164로 0.6% 차이).
+# 원인 재분석: cold_touch(3G)가 hot_churn(100G) 시작 전에 이미 다 끝나버리는
+# 구조라, cold_touch가 만든 소수의 콜드 후보는 GC 초반에 금방 다 재활용되고
+# 그 뒤로는 hot_churn이 쏟아내는 "비슷한 시점에 닫힌(=age가 서로 비슷한) 젊은
+# 핫 line"들끼리만 경쟁하게 됨 -> 후보군 age가 사실상 균일해지면서 CB의
+# age 항이 상수처럼 작용해 Greedy와 같은 순서로 수렴.
 #
-# v3: 스큐를 완화(60/20)해서 핫 영역이 vpc=1~2까지 극단적으로 빨리 안 떨어지게 하고,
-# 더 많은 라인이 "중간 정도로만 무효화된" 상태로 오래 머물게 함 -> vpc가 고만고만한
-# 후보들 사이에서 age 차이가 실제로 타이브레이커 역할을 할 기회를 늘림.
+# v6: cold_touch와 hot_churn의 stonewall을 없애고 같은 그룹에서 병렬 실행 ->
+# 콜드 line 무효화가 GC 전체 기간에 걸쳐 계속 발생하도록 함. COLD_TOUCH_SIZE도
+# 키워서(기본 3G -> 15G) 콜드 후보 풀이 hot_churn 도중에 조기 고갈되지 않게 함.
+#
+# v6 진단 결과 (2026-07-30, victim_line_get_pri()에 임시 printk로 Greedy/CB가
+# 실제로 다른 line을 고르는지 직접 계산/비교): Cost-Benefit은 실제로 다른 line을
+# 고름 -- 초반 11500번(전체 GC 판정의 16.7%) 동안은 최대 87%까지 다르게 골랐음.
+# 문제는 cold_touch(15G)가 hot_churn(100G)보다 훨씬 먼저 끝나버려서(크기 차이 때문에
+# 동시 시작해도 먼저 완료), 그 이후 나머지 83% 구간은 콜드 후보 공급이 끊겨
+# 핫 line끼리만 경쟁 -> 거기서부턴 100% 일치. 최종 erase_sum/max가 수렴해 보였던
+# 건 정책이 실제로 같은 선택을 해서가 아니라 "다르게 고르는 17% 구간"이 "완전히
+# 똑같이 고르는 83% 구간"에 파묻혀서였음.
+#
+# v7: cold_touch와 hot_churn 둘 다 size 기반 대신 time_based+동일 runtime으로
+# 바꿔서, 콜드 후보가 전체 실행 시간 내내 끊이지 않고 공급되도록 함 (사이즈 차이로
+# 인한 조기 고갈 문제를 근본적으로 제거). 이러면 GC divergence가 실행 전체에
+# 걸쳐 유지되어 최종 erase 통계에도 반영될 것으로 기대.
 #
 # 실행: fio scripts/workloads/hotcold.fio --directory=$HOME/nvme_mount --output-format=json --output=<file>
-# (--directory가 아래 filename= 앞에 실제 마운트 경로를 붙여줌)
-#
-# loops=250 (2026-07-29, 서버 벤치마크용으로 상향): 서버는 SSD 전체 용량이 44.9GB라
-# 로컬 VM 기준으로 잡았던 loops=10(총 6GB, 용량의 13%)로는 GC가 전혀 안 트리거됨.
-# loops=250이면 총 146GB(용량의 약 3.3배)를 써서 GC가 확실히 여러 번 돎.
+# COLD_SIZE/COLD_TOUCH_SIZE/HOT_SIZE/HOTCOLD_RUNTIME 환경변수 필수
+# (run_experiment.sh가 기본값과 함께 export함).
 
 [global]
 ioengine=libaio
@@ -42,9 +53,23 @@ bs=4k
 iodepth=16
 group_reporting=1
 
-[hotcold]
-filename=hotcoldfile
+[cold_fill]
+filename=coldfile
+rw=write
+size=${COLD_SIZE}
+stonewall
+
+[cold_touch]
+filename=coldfile
 rw=randwrite
-size=600M
-loops=250
-random_distribution=zoned:60/20:40/80
+size=${COLD_TOUCH_SIZE}
+time_based=1
+runtime=${HOTCOLD_RUNTIME}
+stonewall
+
+[hot_churn]
+filename=hotfile
+rw=randwrite
+size=${HOT_SIZE}
+time_based=1
+runtime=${HOTCOLD_RUNTIME}

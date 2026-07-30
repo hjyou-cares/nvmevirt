@@ -686,6 +686,68 @@ static uint64_t gc_write_page(struct conv_ftl *conv_ftl, struct ppa *old_ppa)
 	return 0;
 }
 
+/* --- TEMPORARY DIAGNOSTIC (2026-07-30, remove before final submission) ---
+ * Regardless of which gc_policy is actually active, independently compute
+ * both "what would Greedy pick" (min vpc) and "what would Cost-Benefit pick"
+ * (max bc, same vpc==0 guard as victim_line_get_pri) from the raw pqueue
+ * contents, and count how often they'd disagree. This is read-only (no
+ * effect on pq state) and exists to answer: is the observed convergence of
+ * Greedy/Cost-Benefit erase stats because they structurally almost always
+ * agree on the top candidate, or something else? */
+static uint64_t diag_gc_total = 0;
+static uint64_t diag_gc_diverge = 0;
+
+static void diag_compare_victims(pqueue_t *pq)
+{
+	struct line *greedy_pick = NULL, *cb_pick = NULL;
+	int min_vpc = INT_MAX;
+	uint64_t best_bc = 0;
+	size_t i;
+
+	if (!pq || pq->size <= 1)
+		return;
+
+	diag_gc_total++;
+
+	for (i = 1; i < pq->size; i++) {
+		struct line *l = (struct line *)pq->d[i];
+		uint64_t age, bc;
+
+		if (l->vpc < min_vpc) {
+			min_vpc = l->vpc;
+			greedy_pick = l;
+		}
+
+		if (l->vpc == 0) {
+			bc = CB_PRI_MAX;
+		} else {
+			age = cb_clock - l->mtime;
+			bc = ((uint64_t)l->ipc * age) / (2ULL * (uint64_t)l->vpc);
+		}
+		if (!cb_pick || bc > best_bc) {
+			best_bc = bc;
+			cb_pick = l;
+		}
+	}
+
+	if (greedy_pick != cb_pick) {
+		diag_gc_diverge++;
+		if (diag_gc_diverge <= 50) {
+			printk(KERN_INFO
+			       "nvmev: GC diverge #%llu (pool=%zu) greedy=line%d(vpc=%d) cb=line%d(vpc=%d,ipc=%d,age=%llu)\n",
+			       diag_gc_diverge, pq->size - 1, greedy_pick->id, greedy_pick->vpc,
+			       cb_pick->id, cb_pick->vpc, cb_pick->ipc,
+			       (unsigned long long)(cb_clock - cb_pick->mtime));
+		}
+	}
+
+	if (diag_gc_total % 500 == 0) {
+		printk(KERN_INFO "nvmev: GC diag summary: total=%llu diverge=%llu\n", diag_gc_total,
+		       diag_gc_diverge);
+	}
+}
+/* --- END TEMPORARY DIAGNOSTIC --- */
+
 static struct line *select_victim_line(struct conv_ftl *conv_ftl, bool force)
 {
 	struct ssdparams *spp = &conv_ftl->ssd->sp;
@@ -696,6 +758,8 @@ static struct line *select_victim_line(struct conv_ftl *conv_ftl, bool force)
 	if (!victim_line) {
 		return NULL;
 	}
+
+	diag_compare_victims(lm->victim_line_pq);
 
 	if (!force && (victim_line->vpc > (spp->pgs_per_line / 8))) {
 		return NULL;

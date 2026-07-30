@@ -1,0 +1,13 @@
+timestamp=20260730_141921
+policy=0
+policy_name=greedy
+label=final2
+workload=hotcold
+hotcold_size=24G
+hotcold_loops=6
+disk_condition=fresh_module_reload_and_mkfs
+nvme_dev=/dev/nvme1n1
+memmap_start=16G
+memmap_size=48G
+cpus=7,8
+fio_cmd=HOTCOLD_SIZE=24G HOTCOLD_LOOPS=6 fio /home/hjyoo/nvmevirt/scripts/workloads/hotcold.fio --directory=$MOUNT_DIR

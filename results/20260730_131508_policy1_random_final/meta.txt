@@ -1,0 +1,11 @@
+timestamp=20260730_131508
+policy=1
+policy_name=random
+label=final
+workload=uniform
+disk_condition=fresh_module_reload_and_mkfs
+nvme_dev=/dev/nvme1n1
+memmap_start=16G
+memmap_size=48G
+cpus=7,8
+fio_cmd=fio --name=gc_stress --filename=$MOUNT_DIR/testfile2 --size=600M --rw=randwrite --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=250 --group_reporting

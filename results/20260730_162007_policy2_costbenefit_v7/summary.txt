@@ -1,0 +1,1 @@
+nonzero_blocks=89436 sum=401248 max=8
