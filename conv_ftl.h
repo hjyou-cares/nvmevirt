@@ -8,6 +8,17 @@
 #include "ssd_config.h"
 #include "ssd.h"
 
+extern uint64_t gc_valid_page_migrate_cnt;
+
+/* GC victim divergence analysis (2026-07-30): see diag_scan_greedy_vs_cb()
+ * in conv_ftl.c. */
+extern uint64_t diag_total_gc;
+extern uint64_t diag_identity_diverge;
+extern uint64_t diag_sum_greedy_vpc;
+extern uint64_t diag_sum_cb_vpc;
+extern uint64_t diag_sum_abs_vpc_diff;
+extern uint64_t diag_same_vpc_diff_line;
+
 struct convparams {
 	uint32_t gc_thres_lines;
 	uint32_t gc_thres_lines_high;

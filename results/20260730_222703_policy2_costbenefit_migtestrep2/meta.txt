@@ -1,0 +1,15 @@
+timestamp=20260730_222703
+policy=2
+policy_name=costbenefit
+label=migtestrep2
+workload=hotcold
+cold_size=30G
+cold_touch_size=15G
+hot_size=1G
+hotcold_runtime=90
+disk_condition=fresh_module_reload_and_mkfs
+nvme_dev=/dev/nvme1n1
+memmap_start=16G
+memmap_size=48G
+cpus=7,8
+fio_cmd=COLD_SIZE=30G COLD_TOUCH_SIZE=15G HOT_SIZE=1G HOTCOLD_RUNTIME=90 fio /home/hjyoo/nvmevirt/scripts/workloads/hotcold.fio --directory=$MOUNT_DIR

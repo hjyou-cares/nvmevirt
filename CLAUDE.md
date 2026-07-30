@@ -287,3 +287,79 @@ awk '$7!=0{sum+=$7; n++; if($7>max) max=$7} END {print "nonzero_blocks="n, "sum=
 - **v7 재설계 (time_based) → 드디어 divergence가 끝까지 유지됨**: `cold_touch`/`hot_churn`을 `size`+`loops` 대신 `time_based=1`+동일 `runtime`(기본 90초, `HOTCOLD_RUNTIME` 환경변수)으로 변경해서 크기 차이와 무관하게 둘 다 같은 시간 동안 돌게 함. 재진단 결과 `total=101000, diverge=93915`(93%, 마지막까지 계속 증가 — 플래토 없음) — divergence가 실행 끝까지 유지되는 것 확인.
 - **v7 3정책 비교 결과, 정규화 필요성 발견**: raw 값은 Greedy `85916/405864/11`, Cost-Benefit `89436/401248/8`, Random `86632/294720/11`. Random의 sum이 가장 낮아 이상해서 io_bytes 확인 → **`time_based` 워크로드에서는 정책마다 같은 90초 동안 실제로 쓴 데이터량이 다름**(Random은 GC 오버헤드로 처리량이 Greedy/CB의 약 절반: ~102GiB vs ~161~162GiB) — raw erase sum 비교는 불공정, GB당 erase로 정규화해야 함. **정규화 결과: Greedy 2500.6 erases/GiB, Cost-Benefit 2490.0(약간 더 효율적), Random 2882.4(뚜렷하게 더 나쁨)**. erase max도 CB(8)가 Greedy/Random(11/11)보다 뚜렷하게 낮고 nonzero_blocks는 더 많음(89436 vs 85916) — **CB가 더 많은 블록에 걸쳐 더 고르게 마모시키면서 총 효율도 비슷하거나 더 낫다는, Cost-Benefit GC의 이론적 이점이 마침내 실측으로 확인됨.** 자세한 수치와 표는 `EXPERIMENT_LOG.md` 2026-07-30 16:14~16:22 항목 참고.
 - **다음 할 일**: (1) v7+정규화 방법론으로 반복측정해서 위 차이가 노이즈가 아닌지 확인, (2) 진단용 printk(`diag_compare_victims`/`diag_gc_total`/`diag_gc_diverge`, `select_victim_line()`의 호출부 포함)를 `conv_ftl.c`에서 제거하고 클린 빌드로 재확인, (3) uniform 워크로드도 필요시 동일 방법론(정규화 포함)으로 재점검, (4) 최종 수치 확정되면 `collect_summary.sh` CSV 집계 → 그래프/보고서 작성 → 제출(7/31 마감, hslee@davinci.snu.ac.kr).
+
+## 진행 상황 (2026-07-30 기준, 파트 2 — printk 제거/반복측정/filebench)
+- **진단용 printk 제거 완료**: `conv_ftl.c`의 `diag_compare_victims`/`diag_gc_total`/`diag_gc_diverge` 및 `select_victim_line()`의 호출부(총 64줄, `865ea61` 커밋에 들어있던 것)를 전부 삭제하고 클린 빌드 확인(서버에서 `make` 에러 없음). 모듈 리로드 후 `dmesg`에 진단 메시지 안 뜨는 것도 확인함.
+- **v7(hotcold) 반복측정 결과, 어제 결론 일부 철회**: 어제 값(rep1)에 2회 더 반복(rep2/rep3)해서 정책당 3회 확보, GiB당 erase로 정규화해 평균·표준편차 계산함.
+  - Random은 확실히 나쁨: 평균 2868.1 erases/GiB (stdev 12.5) vs Greedy 2466.0(stdev 30.1)/Cost-Benefit 2482.9(stdev 13.0) — 격차가 각 정책의 반복 간 변동폭보다 훨씬 커서 노이즈 아님.
+  - **Greedy vs Cost-Benefit의 "GiB당 erase 총량" 우열은 노이즈 수준이라 판정 불가로 정정**: 어제(rep1)는 CB가 근소 우위(2490.0<2500.6)였지만 rep2에서 반대(Greedy 2447.3<CB 2467.9) — Greedy 자체 stdev(30.1)가 두 정책 평균 차(~17)보다 커서 "CB가 총 효율에서 더 낫다"는 어제 결론은 철회.
+  - **다만 erase max·nonzero_blocks는 3회 다 일관됨**: CB는 매번 max 8~9(Greedy는 10~11)로 낮고, nonzero_blocks는 매번 정확히 89436(Greedy는 85576~85916으로 변동)으로 더 많음. → **최종 결론(리포트용): "CB가 GC 효율을 개선한다"가 아니라 "CB는 총 erase는 Greedy와 비슷하지만 마모를 더 고르게 분산시켜 최대 마모(peak wear)를 낮춘다(웨어 레벨링 개선)"로 한정.**
+- **uniform 워크로드도 3회 반복 재점검**: uniform은 `size`+`loops` 고정(time_based 아님)이라 정책 무관하게 항상 정확히 같은 바이트(157,286,400,000B)를 씀 → **정규화 불필요, raw 값 그대로 공정 비교 가능**(v7 hotcold와의 중요한 차이점).
+  - Greedy와 Cost-Benefit은 **3회 다 erase sum·max가 소수점 하나 안 틀리고 완전히 동일**(271620/161) — 노이즈가 아니라 완벽 재현되는 구조적 수렴. hot/cold 스큐가 없는 워크로드에서는 CB 이점이 구조적으로 발현될 수 없다는 가설(7/27~7/30)이 반복측정으로 확정됨.
+  - Random은 3회 다 일관되게 반대 트레이드오프: erase max 9~11(Greedy/CB의 161과 비교하면 15분의 1 수준으로 고르게 분산)이지만 총 erase는 약 0.6~0.7% 더 많음(273332~273400 vs 271620).
+  - latency(avg/p99)는 세 정책 다 겹치는 범위(avg 34557~35475ns, p99 67072~73216ns)라 uniform에서는 latency로 정책을 구분할 근거 없음.
+- **Filebench 셋업 (서버, 처음 설치)**: 서버에 filebench가 아예 설치 안 되어 있어서 신규 빌드함 (기존엔 로컬 VM에만 설치했었음, `~/filebench`에 clone).
+  - **빌드 도구 부재**: `autoconf`/`automake`/`libtool`/`bison`/`flex`가 서버에 없어서 `sudo apt install`로 설치 필요했음. 이때 apt 미러 캐시가 오래돼서 이미 없는 버전을 참조(404) → `sudo apt update`로 해결.
+  - **GCC 15 기본 C 표준 문제**: 그냥 빌드하면 `vars.h`의 `avd_t avd_bool_alloc(boolean_t bool)` 같은 코드가 "two or more data types in declaration specifiers" 에러로 실패함 — **GCC 15부터 기본 C 표준이 바뀌면서 `bool`이 예약어가 됨**, filebench는 `bool`을 변수명으로 쓰는 오래된 코드라 충돌. `./configure CFLAGS="-std=gnu17 -g -O2"`로 예전 표준을 강제 지정해서 해결.
+  - **`fileset.c:131` 실제 버그 발견/수정 (filebench 자체의 오래된 버그, 최신 glibc에서 처음 발현)**: `fileset_resolvepath()`가 `s = malloc(strlen(path)+1)`로 딱 맞는 크기를 할당해놓고 `fb_strlcpy(s, path, MAXPATHLEN)`으로 4096바이트 쓴다고 잘못된 크기를 넘김 — **glibc 2.38+가 진짜 `strlcpy`를 기본 제공하기 시작하면서** `#ifndef HAVE_STRLCPY`로 감싸져 있던 filebench 자체의 관대한 구현 대신 시스템 `strlcpy`가 쓰이게 됐고, `_FORTIFY_SOURCE`가 이 크기 불일치를 정확히 잡아내서 `*** buffer overflow detected ***`로 즉시 크래시함(단순 `define file` 워크로드에서도 100% 재현, gdb 백트레이스로 `fileset_resolvepath → fileset_alloc_file → fileset_create` 경로 확인). **수정: `fb_strlcpy(s, path, MAXPATHLEN)` → `fb_strlcpy(s, path, strlen(path) + 1)`**. 같은 패턴(`malloc(strlen()+1)` 뒤에 다른 크기로 strlcpy/strlcat)이 코드베이스에 더 있는지 확인했으나 이 한 곳뿐이었음. 재빌드+`sudo make install`로 시스템 설치 버전까지 반영, `/tmp`와 실제 NVMe 디바이스 양쪽에서 크래시 없이 정상 동작 확인함.
+  - ASLR 끄기(`echo 0 | sudo tee /proc/sys/kernel/randomize_va_space`)는 기존 CLAUDE.md 안내대로 진행.
+- **filebench용 정책 비교 인프라 신설**: `scripts/run_filebench_experiment.sh` (fio용 `run_experiment.sh`와 동일하게 매 실행마다 모듈 완전 리로드 + mkfs + mount 수행, 그 위에 filebench 실행). 환경변수는 fio 버전과 이름 통일(`NVME_DEV`/`MEMMAP_START`/`MEMMAP_SIZE`/`NVME_CPUS`) + filebench 전용(`FB_FILESIZE` 기본 2g, `FB_RUNTIME` 기본 120초, `FB_NTHREADS` 기본 4). 워크로드는 `scripts/run_filebench_experiment.sh`가 실행 시점에 `$MOUNT_DIR`을 박아넣은 `.f` 파일을 결과 폴더 안에 직접 생성(filebench WML은 셸 환경변수를 못 읽어서). 워크로드 내용: 2GB 파일에 4KB 랜덤쓰기 + 매 write마다 fsync(버퍼링으로 실제 디바이스 반영이 안 되는 것 방지), `run $FB_RUNTIME`으로 time-based 실행(v7 hotcold와 같은 이유로 정책 간 동일 시간 비교).
+- **filebench 캘리브레이션 + 3정책 1회 비교 (서버, 2GB/120초/4스레드)**: GC 트리거 확인됨(정책마다 87~90GiB 씀, 2GB 파일 기준 44배 넘게 덮어씀). time-based라 정책마다 실제 쓴 바이트가 달라서 fio v7과 동일하게 GiB로 정규화함.
+
+  | 정책 | 쓴 양(GiB) | erase sum | erase max | nonzero_blocks | erases/GiB |
+  |---|---|---|---|---|---|
+  | Greedy | 87.58 | 119256 | 3 | 56216 | 1361.7 |
+  | Cost-Benefit | 90.15 | 126216 | 3 | 56960 | 1400.1 |
+  | Random | 87.64 | 127396 | 7 | 81388 | 1453.6 |
+
+  Random이 fio 때와 일관되게 가장 나쁨(erases/GiB 최고, max 최고, nonzero_blocks 압도적으로 많음). Greedy/CB는 이 단일 파일·스큐 없는 워크로드에서 erase max는 동일(3)하고 총량은 Greedy가 근소 우위 — uniform fio 결과("hot/cold 없으면 CB 이점 안 드러남")와 일관된 패턴. **사용자 판단으로 filebench는 이 1회 측정으로 마무리하고 반복측정은 생략함** (마감 임박, filebench는 "두 번째 도구로 fio 결과를 재확인하는" 보조 역할로 결론 — 자세한 항목은 위 표 그대로 리포트에 사용 가능).
+  - 참고: filebench는 fio와 달리 p99 latency를 기본 제공하지 않음(min/max/avg만) — sync-file 최대 지연이 세 정책 다 거의 동일(~917ms)해서 정책 구분 지표로는 안 쓰기로 함, avg latency(~0.010~0.012ms)도 세 정책 간 차이 없음.
+- **다음 할 일 (갱신, 7/31 마감 임박)**: (1) `collect_summary.sh`로 fio 결과 CSV 집계(uniform 3회+hotcold 3회) — filebench 결과는 포맷이 달라 별도 표로 리포트에 삽입, (2) 그래프 작성(erase 분포, GiB당 erase 정규화 비교, latency), (3) 보고서 작성 — uniform(Greedy≈CB 수렴, Random 열세) vs hotcold(CB가 웨어 레벨링 개선, 총 효율은 노이즈 수준) vs filebench(fio uniform 결론 재확인) 구도로 정리, (4) 제출(hslee@davinci.snu.ac.kr, 7/31까지).
+
+## 진행 상황 (2026-07-30 밤, 파트 3 — GC migration-cost 카운터 신설)
+- **핵심 발견**: 지금까지 정책 비교에 써온 `erase_cnt`(블록 지워진 횟수)는 애초에 정책 차이가 잘 안 드러나는 지표였을 가능성이 큼. `erase_cnt` 총합은 사실상 "총 쓰기량 ÷ 블록당 용량"으로 결정되는 값이라 victim 선택 정책과 거의 무관하게 비슷하게 나올 수밖에 없음. **Cost-Benefit GC가 이론적으로 줄이려는 건 "GC 한 번당 옮겨야 하는 valid page 수(migration cost)"**인데, 이 수치는 지금까지 아예 측정한 적이 없었음(`clean_one_flashpg()`가 매번 `cnt`를 계산은 하지만 어디에도 누적 안 함). uniform/hotcold 양쪽에서 계속 봐온 "Greedy≈CB 수렴"이 워크로드 설계 문제가 아니라 애초에 잘못된 지표를 보고 있었기 때문일 수 있다는 가설.
+- **새 카운터 구현 완료** (빌드 확인, 서버에는 아직 미배포 — 사용자가 집에 가야 해서 리로드/재실험은 다음 세션으로 넘김):
+  - `conv_ftl.c`: `cb_clock` 옆에 전역 카운터 `gc_valid_page_migrate_cnt` 추가.
+  - `conv_ftl.c`의 `do_gc()`: victim_line 확정 직후(`credits_to_refill` 대입 바로 다음 줄) `gc_valid_page_migrate_cnt += victim_line->vpc;` 추가 — victim으로 뽑힌 line의 vpc(valid page 수)가 곧 그 line을 회수하는 데 실제로 옮겨야 하는 페이지 수이므로, `clean_one_flashpg()` 내부를 안 건드리고 `do_gc()`에서 한 줄로 집계 가능.
+  - `conv_ftl.h`: `extern uint64_t gc_valid_page_migrate_cnt;` 추가 (main.c에서 읽을 수 있게).
+  - `main.c`: `/proc/nvmev/debug` 읽을 때 맨 앞줄에 `GC_VALID_PAGE_MIGRATE_CNT <값>` 출력 추가, `reset` 쓰기 시 이 카운터도 0으로 초기화되도록 추가. (기존 `erase_cnt` 덤프 포맷의 열 개수는 안 바뀌어서 `run_experiment.sh`의 `awk '$7!=0{...}'` 파싱과 호환됨 — 새 줄은 필드가 2개뿐이라 `$7`이 빈 값→0 취급되어 자동으로 걸러짐.)
+  - `scripts/run_experiment.sh`, `scripts/run_filebench_experiment.sh`: `summary.txt`에 `gc_migrate_pages=` 필드 추가(awk로 `GC_VALID_PAGE_MIGRATE_CNT` 줄 파싱).
+  - 로컬(서버) 빌드 확인 완료(`make` 에러 없음). **아직 모듈 리로드/실제 3정책 비교는 안 함** — 다음에 이어서 할 일.
+- **다음 세션에서 바로 할 일**: 아래 3개를 순서대로 실행(v7 hotcold 워크로드로 1회씩, `migtest` 라벨) → `summary.txt`의 `gc_migrate_pages` 값을 정책별로 비교해서 erase_cnt보다 뚜렷한 Greedy vs Cost-Benefit 차이가 나오는지 확인:
+  ```
+  cd ~/nvmevirt
+  NVME_DEV=/dev/nvme1n1 MEMMAP_START=16G MEMMAP_SIZE=48G NVME_CPUS=7,8 \
+    ./scripts/run_experiment.sh 0 migtest hotcold
+  NVME_DEV=/dev/nvme1n1 MEMMAP_START=16G MEMMAP_SIZE=48G NVME_CPUS=7,8 \
+    ./scripts/run_experiment.sh 1 migtest hotcold
+  NVME_DEV=/dev/nvme1n1 MEMMAP_START=16G MEMMAP_SIZE=48G NVME_CPUS=7,8 \
+    ./scripts/run_experiment.sh 2 migtest hotcold
+  ```
+  결과가 좋으면(뚜렷한 차이) 이 지표를 메인 지표로 승격하고 반복측정 → 그래프/보고서. 결과가 여전히 비슷하면 그때 v7 워크로드 파라미터 튜닝(스큐 강도 등)으로 넘어갈 것.
+
+## 진행 상황 (2026-07-30 밤, 파트 4 — 힙 staleness 버그 발견/수정, 최종 결론 확정)
+- **migtest 결과(파트 3 예고편) 확인**: `gc_migrate_pages`로도 Greedy-CB 차이는 노이즈 수준이었음(평균 차가 각 정책 자체 반복 간 표준편차보다 작음) — "erase_cnt가 부적절한 지표였다"는 파트 3의 가설은 여기서는 기각됨. 자세한 수치는 EXPERIMENT_LOG.md 참고.
+- **사용자가 Codex(다른 LLM)에게 `conv_ftl.c`/`conv_ftl.h`/`pqueue/pqueue.c`를 보여주고 6개 가설을 받아옴** — 그중 결정적인 2개가 실제 버그였음을 확인:
+  1. `victim_line_get_pri()`의 Cost-Benefit score(`bc = ipc*age/(2*vpc)`)는 `cb_clock`(계속 흐르는 전역 논리 시계) 기반이라 매 순간 값이 바뀌는데, `pqueue`(vendored min-heap)의 `bubble_up`/`percolate_down`은 **그 노드가 insert/remove될 때 조상 경로만** 재정렬함 — 힙 전체를 주기적으로 재검증하는 로직이 없어서, 오래 방치된 line들 사이의 상대 순서가 시간이 지나도 재확인 안 된 채 남을 수 있음. 즉 `pqueue_peek()`/`pqueue_pop()`이 "지금 이 순간 진짜 최고 bc" line이 아닌 stale한 line을 리턴할 수 있음.
+  2. 기존 진단(`diag_compare_victims`, 7/30 파트 1)은 `pq->d[]` 전체를 스캔해서 "이상적 Greedy pick"과 "이상적 CB pick"을 비교했을 뿐, "실제로 `pqueue_pop()`이 리턴하는 line"과는 비교한 적이 없어서 위 버그가 있어도 그 진단만으로는 안 잡혔음.
+- **검증 (이론이 아니라 실측으로 확인)**:
+  1. `pqueue/pqueue.c` 알고리즘을 파이썬으로 그대로 포팅해서 CB 계산식으로 최소 반례(2개 line)를 만든 결과: 몇 틱만 지나도 heap root와 전체 스캔 진짜 최고 line이 완전히 달라지고 라이브러리 자체 검증 함수 `pqueue_is_valid()`도 계속 `False` — 추가 insert/remove 없인 영원히 자기 교정 안 됨.
+  2. 좀 더 실전과 비슷한 규모(line 수천 개, 지속적 invalidate+GC 20만 스텝) 시뮬레이션: 실제 `pqueue_pop()` 결과가 그 순간 전체 스캔 진짜 최고 line과 87.2% 다름(임의 파라미터 기반이라 %는 참고용, "메커니즘이 실재하고 크다"의 증거로만 사용).
+  3. 실제 커널에 임시 카운터를 넣어 hotcold v7로 실측: `total=99500, changed=5443`(5.47%) — 버그가 실재하고 실제로 발동함을 확인.
+- **수정 완료**: `select_victim_line()`에서 `GC_POLICY_COST_BENEFIT`일 때 `pqueue_pop()`(stale 가능) 대신 `pq->d[1..size-1]` 전체 스캔으로 그 순간 진짜 최고 line을 찾아 `pqueue_remove()`로 꺼내도록 교체. CB 계산식은 `cb_victim_pri()`로 분리해서 `victim_line_get_pri()`와 아래 분석 계측이 공유(중복 방지). Greedy/Random 분기는 안 건드림(Greedy는 vpc만 키로 쓰고 항상 정확히 reheapify되므로 애초에 stale해질 수 없음). 서버 빌드 확인 완료.
+- **상시 분석 계측 추가 (제출 코드에도 유지하기로 결정)**: `diag_scan_greedy_vs_cb()` — 활성 `gc_policy`와 무관하게 매 GC마다 전체 스캔으로 "Greedy라면 골랐을 line"과 "CB라면 골랐을 line"을 각각 계산해서 `total_gc`/`greedy_vs_cb_identity_diverge`/`avg_greedy_vpc`/`avg_cb_vpc`/`avg_abs_vpc_diff`/`same_vpc_different_line_ratio`를 누적, `/proc/nvmev/debug`에 노출, `run_experiment.sh`의 `summary.txt`에 자동 집계(`erase_cv`도 이때 추가). read-only라 실제 GC 동작에 영향 없음 — 보고서 방법론 섹션에서 "어떻게 검증했는지"를 보여주는 근거 코드로 쓸 수 있어서 "제출 전 제거" 대상에서 제외하기로 함 (주석도 정식 기능으로 재작성 완료).
+- **최종 3정책 비교 확정 (`vpcdiag`, 힙 staleness 수정 후, hotcold v7, 각 3회 반복)**:
+
+  | 지표 | Greedy | Cost-Benefit | Random |
+  |---|---|---|---|
+  | migrate_pages/GiB | 48,493 ± 1,302 | 55,079 ± 1,198 | 134,288 ± 954 |
+  | erase/GiB | 2,465.4 ± 8.9 | 2,500.2 ± 7.6 | 2,870.4 ± 6.4 |
+  | erase max | 10.3 | 8.3 | 11.3 |
+  | nonzero_blocks | 85,631 | 89,440 | 86,507 |
+  | erase_cv | 0.239 | 0.231 | 0.489 |
+  | latency avg | 80.2μs | 84.5μs | 152.4μs |
+  | latency p99 | 432.1μs | 439.0μs | 1,521.0μs |
+
+  3회 다 Greedy/CB range가 거의 안 겹침(노이즈 아님). `diag_scan_greedy_vs_cb`로 같이 잰 `avg_abs_vpc_diff`도 CB 구동 시 33.8(평균 vpc의 47.4%)로 작지 않아서, "다른 line을 골라도 비용은 비슷하다"가 아니라 "다르게 고르면 비용도 실제로 다르다"는 게 정량적으로 뒷받침됨.
+- **최종 결론(리포트 헤드라인)**: 지금까지(7/27~7/30 파트 3까지) 계속 봐온 "Greedy≈CB 수렴"은 힙 staleness 버그가 CB를 우연히 Greedy와 비슷하게 행동하게 만든 착시였음. 버그를 고치자 **Cost-Benefit은 총 migration 효율을 Greedy보다 13.6% 더 씀(latency도 약 5% 높음) 대신, 최대 마모(erase max)를 8.3으로 낮추고(Greedy 10.3) 마모를 더 많은 블록(89,440 vs 85,631)에 분산시킴** — Cost-Benefit GC의 교과서적 트레이드오프(총 효율 희생 ↔ 웨어 레벨링 개선)와 정확히 일치하는, 이 프로젝트에서 가장 깔끔한 결과. Random은 모든 지표에서 확실히 최악. (uniform 워크로드는 hot/cold 스큐가 없어서 이 버그와 무관하게 Greedy=CB로 항상 수렴함 — 이것도 리포트에서 "워크로드에 따른 차이"로 다룰 수 있는 포인트.)
+- **다음 할 일**: 그래프 작성 → 보고서 작성(uniform은 Greedy=CB 구조적 수렴 / hotcold는 CB의 웨어 레벨링 개선(총효율 트레이드오프 있음) / Random은 전 지표 열세 / filebench는 fio uniform 결론 재확인, 구도로 정리하되 **힙 staleness 버그 발견→수정 과정을 방법론 섹션에 포함**할 것) → 제출(hslee@davinci.snu.ac.kr, 7/31까지).

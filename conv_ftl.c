@@ -23,6 +23,30 @@ MODULE_PARM_DESC(gc_policy, "GC victim selection policy: 0=Greedy, 1=Random, 2=C
  * Only ever touched from the single nvmev_dispatcher kthread, so no locking needed. */
 static uint64_t cb_clock = 0;
 
+/* Total valid pages copied during GC across all do_gc() calls (2026-07-30).
+ * erase_cnt alone is mostly driven by total write volume, not by victim choice,
+ * so it barely differs between policies; this is the actual migration cost
+ * Cost-Benefit is designed to reduce. Exposed via /proc/nvmev/debug. */
+uint64_t gc_valid_page_migrate_cnt = 0;
+
+/* GC victim divergence analysis (2026-07-30). Regardless of which gc_policy is
+ * actually driving real GC, scan the raw victim queue on every
+ * select_victim_line() call to find what Greedy (min vpc) and Cost-Benefit
+ * (max cb_victim_pri) would each pick right now, and accumulate whether the
+ * two pick different lines that nonetheless carry the same vpc (i.e. the same
+ * migration cost). Purpose: even where Greedy and CB disagree on WHICH line to
+ * reclaim, do they disagree on HOW MANY valid pages that reclaim costs? This
+ * is what showed the two policies' migration cost per GC genuinely differs
+ * (not just which line gets picked) -- see the report. Read-only, no effect
+ * on pq state or on which line actually gets reclaimed. Exposed via
+ * /proc/nvmev/debug (main.c), reset together with the other debug counters. */
+uint64_t diag_total_gc = 0;
+uint64_t diag_identity_diverge = 0;
+uint64_t diag_sum_greedy_vpc = 0;
+uint64_t diag_sum_cb_vpc = 0;
+uint64_t diag_sum_abs_vpc_diff = 0;
+uint64_t diag_same_vpc_diff_line = 0;
+
 static inline bool last_pg_in_wordline(struct conv_ftl *conv_ftl, struct ppa *ppa)
 {
 	struct ssdparams *spp = &conv_ftl->ssd->sp;
@@ -90,23 +114,71 @@ static inline int victim_line_cmp_pri(pqueue_pri_t next, pqueue_pri_t curr)
  * so that "smaller priority = better victim" still holds for the min-heap */
 #define CB_PRI_MAX (~0ULL)
 
+/* Cost-Benefit priority for a line, independent of the currently active
+ * gc_policy (used both by victim_line_get_pri() when CB is active, and by the
+ * diagnostic scan below so it can evaluate "what would CB pick" even while
+ * Greedy/Random is the one actually driving GC). */
+static inline pqueue_pri_t cb_victim_pri(struct line *line)
+{
+	uint64_t age, bc;
+
+	if (line->vpc == 0)
+		return 0; /* already fully invalid: best possible victim */
+
+	age = cb_clock - line->mtime;
+	bc = ((uint64_t)line->ipc * age) / (2ULL * (uint64_t)line->vpc);
+	/* bigger bc = better victim; invert so the min-heap picks it first */
+	return CB_PRI_MAX - bc;
+}
+
 static inline pqueue_pri_t victim_line_get_pri(void *a)
 {
 	struct line *line = (struct line *)a;
 
-	if (gc_policy == GC_POLICY_COST_BENEFIT) {
-		uint64_t age, bc;
-
-		if (line->vpc == 0)
-			return 0; /* already fully invalid: best possible victim */
-
-		age = cb_clock - line->mtime;
-		bc = ((uint64_t)line->ipc * age) / (2ULL * (uint64_t)line->vpc);
-		/* bigger bc = better victim; invert so the min-heap picks it first */
-		return CB_PRI_MAX - bc;
-	}
+	if (gc_policy == GC_POLICY_COST_BENEFIT)
+		return cb_victim_pri(line);
 
 	return line->vpc;
+}
+
+/* See the comment on diag_total_gc et al. above. */
+static void diag_scan_greedy_vs_cb(pqueue_t *pq)
+{
+	struct line *greedy_pick = NULL, *cb_pick = NULL;
+	int min_vpc = INT_MAX;
+	pqueue_pri_t best_cb_pri = 0;
+	int diff;
+	size_t i;
+
+	if (!pq || pq->size <= 1)
+		return;
+
+	for (i = 1; i < pq->size; i++) {
+		struct line *l = (struct line *)pq->d[i];
+		pqueue_pri_t pri = cb_victim_pri(l);
+
+		if (l->vpc < min_vpc) {
+			min_vpc = l->vpc;
+			greedy_pick = l;
+		}
+		if (!cb_pick || pri < best_cb_pri) {
+			best_cb_pri = pri;
+			cb_pick = l;
+		}
+	}
+
+	diag_total_gc++;
+	diag_sum_greedy_vpc += greedy_pick->vpc;
+	diag_sum_cb_vpc += cb_pick->vpc;
+
+	diff = greedy_pick->vpc - cb_pick->vpc;
+	diag_sum_abs_vpc_diff += (diff < 0) ? -diff : diff;
+
+	if (greedy_pick != cb_pick) {
+		diag_identity_diverge++;
+		if (greedy_pick->vpc == cb_pick->vpc)
+			diag_same_vpc_diff_line++;
+	}
 }
 
 static inline void victim_line_set_pri(void *a, pqueue_pri_t pri)
@@ -686,68 +758,6 @@ static uint64_t gc_write_page(struct conv_ftl *conv_ftl, struct ppa *old_ppa)
 	return 0;
 }
 
-/* --- TEMPORARY DIAGNOSTIC (2026-07-30, remove before final submission) ---
- * Regardless of which gc_policy is actually active, independently compute
- * both "what would Greedy pick" (min vpc) and "what would Cost-Benefit pick"
- * (max bc, same vpc==0 guard as victim_line_get_pri) from the raw pqueue
- * contents, and count how often they'd disagree. This is read-only (no
- * effect on pq state) and exists to answer: is the observed convergence of
- * Greedy/Cost-Benefit erase stats because they structurally almost always
- * agree on the top candidate, or something else? */
-static uint64_t diag_gc_total = 0;
-static uint64_t diag_gc_diverge = 0;
-
-static void diag_compare_victims(pqueue_t *pq)
-{
-	struct line *greedy_pick = NULL, *cb_pick = NULL;
-	int min_vpc = INT_MAX;
-	uint64_t best_bc = 0;
-	size_t i;
-
-	if (!pq || pq->size <= 1)
-		return;
-
-	diag_gc_total++;
-
-	for (i = 1; i < pq->size; i++) {
-		struct line *l = (struct line *)pq->d[i];
-		uint64_t age, bc;
-
-		if (l->vpc < min_vpc) {
-			min_vpc = l->vpc;
-			greedy_pick = l;
-		}
-
-		if (l->vpc == 0) {
-			bc = CB_PRI_MAX;
-		} else {
-			age = cb_clock - l->mtime;
-			bc = ((uint64_t)l->ipc * age) / (2ULL * (uint64_t)l->vpc);
-		}
-		if (!cb_pick || bc > best_bc) {
-			best_bc = bc;
-			cb_pick = l;
-		}
-	}
-
-	if (greedy_pick != cb_pick) {
-		diag_gc_diverge++;
-		if (diag_gc_diverge <= 50) {
-			printk(KERN_INFO
-			       "nvmev: GC diverge #%llu (pool=%zu) greedy=line%d(vpc=%d) cb=line%d(vpc=%d,ipc=%d,age=%llu)\n",
-			       diag_gc_diverge, pq->size - 1, greedy_pick->id, greedy_pick->vpc,
-			       cb_pick->id, cb_pick->vpc, cb_pick->ipc,
-			       (unsigned long long)(cb_clock - cb_pick->mtime));
-		}
-	}
-
-	if (diag_gc_total % 500 == 0) {
-		printk(KERN_INFO "nvmev: GC diag summary: total=%llu diverge=%llu\n", diag_gc_total,
-		       diag_gc_diverge);
-	}
-}
-/* --- END TEMPORARY DIAGNOSTIC --- */
-
 static struct line *select_victim_line(struct conv_ftl *conv_ftl, bool force)
 {
 	struct ssdparams *spp = &conv_ftl->ssd->sp;
@@ -759,7 +769,7 @@ static struct line *select_victim_line(struct conv_ftl *conv_ftl, bool force)
 		return NULL;
 	}
 
-	diag_compare_victims(lm->victim_line_pq);
+	diag_scan_greedy_vs_cb(lm->victim_line_pq);
 
 	if (!force && (victim_line->vpc > (spp->pgs_per_line / 8))) {
 		return NULL;
@@ -770,6 +780,30 @@ static struct line *select_victim_line(struct conv_ftl *conv_ftl, bool force)
 		size_t idx = 1 + (get_random_u32() % (pq->size - 1));
 
 		victim_line = pq->d[idx];
+		pqueue_remove(pq, victim_line);
+	} else if (gc_policy == GC_POLICY_COST_BENEFIT) {
+		/* victim_line_get_pri()'s Cost-Benefit score depends on cb_clock, which
+		 * keeps advancing after a line is already sitting in the heap. Heap
+		 * insert/remove only re-sorts the ancestor path of the node actually being
+		 * touched, so two resident lines with different ipc/vpc ratios can silently
+		 * swap their true relative rank purely from time passing, with nothing
+		 * ever telling the heap to re-check them (confirmed by simulating this
+		 * pqueue against this exact formula: a 2-node heap can sit permanently
+		 * mis-ordered, and pqueue_is_valid() goes false, once no further
+		 * insert/remove touches it). So pqueue_peek()/pqueue_pop() can return a
+		 * line that is no longer the actual best-scoring one. Rescan the raw heap
+		 * array for the true current best instead of trusting heap order; O(n) per
+		 * GC call, but GC calls are rare relative to page writes. */
+		pqueue_t *pq = lm->victim_line_pq;
+		size_t i;
+
+		victim_line = pq->d[1];
+		for (i = 2; i < pq->size; i++) {
+			struct line *cand = pq->d[i];
+
+			if (victim_line_get_pri(cand) < victim_line_get_pri(victim_line))
+				victim_line = cand;
+		}
 		pqueue_remove(pq, victim_line);
 	} else {
 		pqueue_pop(lm->victim_line_pq);
@@ -885,6 +919,7 @@ static int do_gc(struct conv_ftl *conv_ftl, bool force)
 		    conv_ftl->lm.full_line_cnt, conv_ftl->lm.free_line_cnt);
 
 	conv_ftl->wfc.credits_to_refill = victim_line->ipc;
+	gc_valid_page_migrate_cnt += victim_line->vpc;
 
 	/* copy back valid data */
 	for (flashpg = 0; flashpg < spp->flashpgs_per_blk; flashpg++) {

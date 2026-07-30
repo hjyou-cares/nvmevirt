@@ -101,8 +101,31 @@ fi
 
 cat /proc/nvmev/debug > "$OUTDIR/erase_cnt.txt"
 
-awk '$7!=0{sum+=$7; n++; if($7>max) max=$7} END {print "nonzero_blocks="n, "sum="sum, "max="max}' \
-    "$OUTDIR/erase_cnt.txt" > "$OUTDIR/summary.txt"
+awk '
+  /^GC_VALID_PAGE_MIGRATE_CNT/{migrate=$2}
+  /^DIAG_TOTAL_GC/{diag_total=$2}
+  /^DIAG_IDENTITY_DIVERGE/{diag_diverge=$2}
+  /^DIAG_SUM_GREEDY_VPC/{diag_sum_greedy=$2}
+  /^DIAG_SUM_CB_VPC/{diag_sum_cb=$2}
+  /^DIAG_SUM_ABS_VPC_DIFF/{diag_sum_absdiff=$2}
+  /^DIAG_SAME_VPC_DIFF_LINE/{diag_same_vpc=$2}
+  $7!=0{sum+=$7; n++; if($7>max) max=$7; blk_sum+=$7; blk_sumsq+=$7*$7; blk_n++}
+  END {
+    printf "nonzero_blocks=%d sum=%d max=%d gc_migrate_pages=%d", n, sum, max, migrate
+    printf " total_gc=%d greedy_vs_cb_identity_diverge=%d", diag_total, diag_diverge
+    if (diag_total > 0) {
+      printf " avg_greedy_vpc=%.3f avg_cb_vpc=%.3f avg_abs_vpc_diff=%.3f same_vpc_different_line_ratio=%.4f",
+             diag_sum_greedy/diag_total, diag_sum_cb/diag_total, diag_sum_absdiff/diag_total,
+             (diag_diverge>0 ? diag_same_vpc/diag_diverge : 0)
+    }
+    if (blk_n > 1) {
+      mean = blk_sum/blk_n
+      var = (blk_sumsq/blk_n) - (mean*mean)
+      if (var < 0) var = 0
+      printf " erase_cv=%.4f", sqrt(var)/mean
+    }
+    printf "\n"
+  }' "$OUTDIR/erase_cnt.txt" > "$OUTDIR/summary.txt"
 
 {
   echo "timestamp=$TS"
