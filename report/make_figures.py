@@ -305,4 +305,52 @@ ax.grid(axis="x", visible=False)
 ax.margins(y=0.22)
 save(fig, "fig7_bugfix_before_after")
 
+# =====================================================================
+# Fig 8: 워크로드가 정책 차이를 만드는가 — uniform vs hotcold 대비
+# 출처: results/*_uniformdiag/ (2026-07-31), results/*_vpcdiag_rep*/
+# =====================================================================
+fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.3))
+wl = ["uniform", "hotcold v7"]
+xw = np.arange(len(wl))
+NEUTRAL = "#898781"
+
+# (1) 두 정책이 서로 다른 line을 고른 비율
+diverge_pct = [0.0, 90.3]
+b = axes[0].bar(xw, diverge_pct, width=0.5, color=[NEUTRAL, COLOR["costbenefit"]], zorder=3)
+axes[0].set_ylabel("Greedy와 CB가 다른 line을 고른 비율 (%)")
+axes[0].set_title("정책 선택이 갈리는가", loc="left", fontsize=11.5, pad=10)
+axes[0].set_ylim(0, 100)
+for r, v in zip(b, diverge_pct):
+    axes[0].annotate(f"{v:.1f}%", xy=(r.get_x() + r.get_width() / 2, v), xytext=(0, 4),
+                     textcoords="offset points", ha="center", fontsize=10, color=INK_SECONDARY)
+
+# (2) 고른 line의 비용(vpc) 차이
+vpc_diff = [0.0, 33.8]
+b = axes[1].bar(xw, vpc_diff, width=0.5, color=[NEUTRAL, COLOR["costbenefit"]], zorder=3)
+axes[1].set_ylabel("avg |vpc_greedy − vpc_cb|")
+axes[1].set_title("갈린 선택이 비용 차이로 이어지는가", loc="left", fontsize=11.5, pad=10)
+for r, v in zip(b, vpc_diff):
+    axes[1].annotate(f"{v:.1f}", xy=(r.get_x() + r.get_width() / 2, v), xytext=(0, 4),
+                     textcoords="offset points", ha="center", fontsize=10, color=INK_SECONDARY)
+
+# (3) GC 한 번당 실제로 옮긴 valid page 수
+mig_per_gc = [0.0, 88.1]
+b = axes[2].bar(xw, mig_per_gc, width=0.5, color=[NEUTRAL, COLOR["costbenefit"]], zorder=3)
+axes[2].set_ylabel("GC 1회당 이동한 valid page 수")
+axes[2].set_title("GC에 비용이 드는가 (Cost-Benefit 기준)", loc="left", fontsize=11.5, pad=10)
+for r, v in zip(b, mig_per_gc):
+    axes[2].annotate(f"{v:.1f}", xy=(r.get_x() + r.get_width() / 2, v), xytext=(0, 4),
+                     textcoords="offset points", ha="center", fontsize=10, color=INK_SECONDARY)
+
+for ax in axes:
+    ax.set_xticks(xw)
+    ax.set_xticklabels(wl)
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.grid(axis="x", visible=False)
+    ax.margins(y=0.2)
+
+fig.suptitle("워크로드가 정책 차이를 결정한다 — uniform에서는 두 정책이 '증명 가능하게' 동일",
+             fontsize=13, color=INK_PRIMARY, y=1.04)
+save(fig, "fig8_workload_decides")
+
 print("done.")

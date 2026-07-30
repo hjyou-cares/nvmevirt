@@ -113,6 +113,10 @@ awk '
   # mawk는 uninitialized 필드를 문자열 ""로 보고 "" != 0 을 참으로 평가함 ->
   # 가드가 없으면 헤더 줄 개수만큼 nonzero_blocks가 부풀려짐 (2026-07-31 발견).
   NF==7 && $7!=0{sum+=$7; n++; if($7>max) max=$7; blk_sum+=$7; blk_sumsq+=$7*$7; blk_n++}
+  # erase_cv_all: 전체 블록(erase 0회인 블록 포함) 기준 변동계수.
+  # erase_cv(아래, nonzero만)는 정책마다 모집단 크기가 달라져서(예: Greedy 85,624 vs
+  # CB 89,433) 엄밀한 비교가 아님 -> 마모 균등도는 모집단이 고정된 이 값으로 볼 것.
+  NF==7 {all_sum+=$7; all_sumsq+=$7*$7; all_n++}
   END {
     printf "nonzero_blocks=%d sum=%d max=%d gc_migrate_pages=%d", n, sum, max, migrate
     printf " total_gc=%d greedy_vs_cb_identity_diverge=%d", diag_total, diag_diverge
@@ -126,6 +130,12 @@ awk '
       var = (blk_sumsq/blk_n) - (mean*mean)
       if (var < 0) var = 0
       printf " erase_cv=%.4f", sqrt(var)/mean
+    }
+    if (all_n > 1 && all_sum > 0) {
+      amean = all_sum/all_n
+      avar = (all_sumsq/all_n) - (amean*amean)
+      if (avar < 0) avar = 0
+      printf " erase_cv_all=%.4f", sqrt(avar)/amean
     }
     printf "\n"
   }' "$OUTDIR/erase_cnt.txt" > "$OUTDIR/summary.txt"

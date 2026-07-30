@@ -95,9 +95,31 @@ cat /proc/nvmev/debug > "$OUTDIR/erase_cnt.txt"
 # NF==7 가드 필수: 헤더 줄(GC_VALID_PAGE_MIGRATE_CNT/DIAG_*)은 필드가 2개뿐이라
 # $7이 uninitialized인데 mawk는 이를 ""로 보고 "" != 0 을 참으로 평가함 -> 가드가
 # 없으면 헤더 줄 개수만큼 nonzero_blocks가 부풀려짐 (2026-07-31 발견).
-awk '/^GC_VALID_PAGE_MIGRATE_CNT/{migrate=$2} NF==7 && $7!=0{sum+=$7; n++; if($7>max) max=$7}
-    END {print "nonzero_blocks="n, "sum="sum, "max="max, "gc_migrate_pages="migrate}' \
-    "$OUTDIR/erase_cnt.txt" > "$OUTDIR/summary.txt"
+awk '/^GC_VALID_PAGE_MIGRATE_CNT/{migrate=$2}
+     /^DIAG_TOTAL_GC/{diag_total=$2}
+     /^DIAG_IDENTITY_DIVERGE/{diag_diverge=$2}
+     /^DIAG_SUM_GREEDY_VPC/{diag_sum_greedy=$2}
+     /^DIAG_SUM_CB_VPC/{diag_sum_cb=$2}
+     /^DIAG_SUM_ABS_VPC_DIFF/{diag_sum_absdiff=$2}
+     /^DIAG_SAME_VPC_DIFF_LINE/{diag_same_vpc=$2}
+     NF==7 && $7!=0{sum+=$7; n++; if($7>max) max=$7}
+     NF==7 {all_sum+=$7; all_sumsq+=$7*$7; all_n++}
+    END {
+      printf "nonzero_blocks=%d sum=%d max=%d gc_migrate_pages=%d", n, sum, max, migrate
+      printf " total_gc=%d greedy_vs_cb_identity_diverge=%d", diag_total, diag_diverge
+      if (diag_total > 0) {
+        printf " avg_greedy_vpc=%.3f avg_cb_vpc=%.3f avg_abs_vpc_diff=%.3f same_vpc_different_line_ratio=%.4f",
+               diag_sum_greedy/diag_total, diag_sum_cb/diag_total, diag_sum_absdiff/diag_total,
+               (diag_diverge>0 ? diag_same_vpc/diag_diverge : 0)
+      }
+      if (all_n > 1 && all_sum > 0) {
+        amean = all_sum/all_n
+        avar = (all_sumsq/all_n) - (amean*amean)
+        if (avar < 0) avar = 0
+        printf " erase_cv_all=%.4f", sqrt(avar)/amean
+      }
+      printf "\n"
+    }' "$OUTDIR/erase_cnt.txt" > "$OUTDIR/summary.txt"
 
 {
   echo "timestamp=$TS"
