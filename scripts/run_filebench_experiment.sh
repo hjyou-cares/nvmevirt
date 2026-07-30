@@ -92,7 +92,10 @@ sync
 
 cat /proc/nvmev/debug > "$OUTDIR/erase_cnt.txt"
 
-awk '/^GC_VALID_PAGE_MIGRATE_CNT/{migrate=$2} $7!=0{sum+=$7; n++; if($7>max) max=$7}
+# NF==7 가드 필수: 헤더 줄(GC_VALID_PAGE_MIGRATE_CNT/DIAG_*)은 필드가 2개뿐이라
+# $7이 uninitialized인데 mawk는 이를 ""로 보고 "" != 0 을 참으로 평가함 -> 가드가
+# 없으면 헤더 줄 개수만큼 nonzero_blocks가 부풀려짐 (2026-07-31 발견).
+awk '/^GC_VALID_PAGE_MIGRATE_CNT/{migrate=$2} NF==7 && $7!=0{sum+=$7; n++; if($7>max) max=$7}
     END {print "nonzero_blocks="n, "sum="sum, "max="max, "gc_migrate_pages="migrate}' \
     "$OUTDIR/erase_cnt.txt" > "$OUTDIR/summary.txt"
 

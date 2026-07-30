@@ -1,1 +1,1 @@
-nonzero_blocks=89437 sum=399248 max=9 gc_migrate_pages=8833646
+nonzero_blocks=89436 sum=399248 max=9 gc_migrate_pages=8833646 total_gc=0 greedy_vs_cb_identity_diverge=0 erase_cv=0.2316

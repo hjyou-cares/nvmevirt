@@ -109,7 +109,10 @@ awk '
   /^DIAG_SUM_CB_VPC/{diag_sum_cb=$2}
   /^DIAG_SUM_ABS_VPC_DIFF/{diag_sum_absdiff=$2}
   /^DIAG_SAME_VPC_DIFF_LINE/{diag_same_vpc=$2}
-  $7!=0{sum+=$7; n++; if($7>max) max=$7; blk_sum+=$7; blk_sumsq+=$7*$7; blk_n++}
+  # NF==7 가드 필수: 위 헤더 줄들은 필드가 2개뿐이라 $7이 uninitialized인데,
+  # mawk는 uninitialized 필드를 문자열 ""로 보고 "" != 0 을 참으로 평가함 ->
+  # 가드가 없으면 헤더 줄 개수만큼 nonzero_blocks가 부풀려짐 (2026-07-31 발견).
+  NF==7 && $7!=0{sum+=$7; n++; if($7>max) max=$7; blk_sum+=$7; blk_sumsq+=$7*$7; blk_n++}
   END {
     printf "nonzero_blocks=%d sum=%d max=%d gc_migrate_pages=%d", n, sum, max, migrate
     printf " total_gc=%d greedy_vs_cb_identity_diverge=%d", diag_total, diag_diverge

@@ -331,13 +331,13 @@
   | migrate_pages/GiB | 48,493 ± 1,302 | 55,079 ± 1,198 | 134,288 ± 954 |
   | erase/GiB | 2,465.4 ± 8.9 | 2,500.2 ± 7.6 | 2,870.4 ± 6.4 |
   | erase max | 10.3 (10,11,10) | 8.3 (9,8,8) | 11.3 (11,12,11) |
-  | nonzero_blocks | 85,631 | 89,440 | 86,507 |
+  | nonzero_blocks | 85,624 | 89,433 | 86,500 |
   | erase_cv | 0.239 | 0.231 | 0.489 |
   | latency avg | 80.2μs ± 0.6 | 84.5μs ± 0.6 | 152.4μs ± 0.7 |
   | latency p99 | 432.1μs ± 10.8 | 439.0μs ± 16.6 | 1,521.0μs ± 34.1 |
 
   `diag_scan_greedy_vs_cb()`로 같이 잰 vpc 비교(Greedy 구동 중 vs CB 구동 중, 각 3회 평균): `avg_abs_vpc_diff`가 Greedy 구동 시 11.3(평균 vpc의 13.4%), **CB 구동 시 33.8(47.4%)** — 작지 않음. "다른 line을 골라도 vpc는 비슷하다"는 가설은 기각되고, "다르게 고르면 비용도 실제로 다르다"는 게 확인됨 (`same_vpc_different_line_ratio`도 CB 구동 시 0.02%로 사실상 0).
-- **최종 결론(리포트 헤드라인)**: 이전까지의 "Greedy≈CB 수렴"은 힙 staleness 버그가 CB를 우연히 Greedy와 비슷하게 행동하게 만든 착시였음. 버그 수정 후 3회 반복 모두 range가 안 겹치는 수준으로 뚜렷하게 갈림 — **Cost-Benefit은 총 migration 효율을 13.6% 더 씀(latency도 약 5% 높음) 대신, 최대 마모(erase max)를 낮추고(8.3 vs 10.3) 마모를 더 많은 블록에 분산시킴(89,440 vs 85,631)** — Cost-Benefit GC의 교과서적 트레이드오프(총 효율 희생 ↔ 웨어 레벨링 개선)와 정확히 일치. Random은 모든 지표에서 확실히 최악.
+- **최종 결론(리포트 헤드라인)**: 이전까지의 "Greedy≈CB 수렴"은 힙 staleness 버그가 CB를 우연히 Greedy와 비슷하게 행동하게 만든 착시였음. 버그 수정 후 3회 반복 모두 range가 안 겹치는 수준으로 뚜렷하게 갈림 — **Cost-Benefit은 총 migration 효율을 13.6% 더 씀(latency도 약 5% 높음) 대신, 최대 마모(erase max)를 낮추고(8.3 vs 10.3) 마모를 더 많은 블록에 분산시킴(89,433 vs 85,624)** — Cost-Benefit GC의 교과서적 트레이드오프(총 효율 희생 ↔ 웨어 레벨링 개선)와 정확히 일치. Random은 모든 지표에서 확실히 최악.
 - raw 로그 경로: `results/*_vpcdiag_rep{1,2,3}/` (policy0/1/2 각각)
 
 ---
@@ -481,3 +481,15 @@
   3. 실제 커널에 임시 카운터(`diag_fix_total`/`diag_fix_changed`)를 추가해 hotcold v7로 실측: `total=99500, changed=5443`(5.47%) — 버그가 실재하고 실제로 발동함을 확인. 다만 실제 발동 비율이 5.47%뿐이라, 이 정도로는 fix 전/후 1회 측정 비교만으로는 총량 지표 차이가 안 드러남(→ 이게 왜 지금까지 "노이즈 수준"으로만 보였는지의 답이기도 함).
 - 해결: `select_victim_line()`에서 `GC_POLICY_COST_BENEFIT`일 때 `pqueue_pop()` 대신 `pq->d[1..size-1]` 전체 스캔으로 그 순간 진짜 최고 line을 찾아 `pqueue_remove()`로 꺼내도록 교체 (자세한 코드는 "진행 로그" 2026-07-30 파트 3 참고). 수정 후 Greedy/Random/Cost-Benefit 각 3회씩 재측정(`vpcdiag`)한 결과, 처음으로 range가 안 겹치는 뚜렷한 차이 확인 — migrate_pages/GiB에서 CB가 Greedy보다 13.6% 더 씀, erase max는 CB가 확실히 더 낮음(8.3 vs 10.3). **결론: 지금까지의 "Greedy≈CB 수렴"은 이 힙 staleness 버그가 CB를 우연히 Greedy와 비슷하게 행동하게 만든 착시였음.** 자세한 최종 수치는 "벤치마크 실행 로그"의 `vpcdiag` 항목 참고.
 - 추가 검증 도구: 버그 수정과 별개로, "Greedy와 CB가 다른 line을 골라도 migration cost(vpc)는 비슷한지"를 직접 확인하는 상시 계측(`diag_scan_greedy_vs_cb`, `avg_greedy_vpc`/`avg_cb_vpc`/`avg_abs_vpc_diff`/`same_vpc_different_line_ratio`)을 추가해서, "다르게 고르면 비용도 실제로 다르다"(CB 구동 중 `avg_abs_vpc_diff`=평균 vpc의 47.4%)는 것까지 정량 확인. 이 계측은 read-only라 실제 GC 동작에 영향 없고, 보고서 부연자료로 쓸 수 있어 최종 제출 코드에도 남기기로 함(`conv_ftl.c`/`conv_ftl.h`/`main.c` 주석 참고).
+
+### 2026-07-31 (제출 전 전체 코드 재점검)
+- 증상: 제출 전 커밋된 코드 전체를 다시 리뷰하다가, `run_experiment.sh`의 summary 집계 awk가 `nonzero_blocks`를 헤더 줄 개수만큼 부풀리고 있는 것을 발견.
+- 원인: `/proc/nvmev/debug` 출력 맨 앞에 붙는 헤더 줄들(`GC_VALID_PAGE_MIGRATE_CNT`, `DIAG_*` 총 7줄)은 필드가 2개뿐이라 `$7`이 uninitialized인데, **mawk는 uninitialized 필드를 문자열 `""`로 취급해서 `"" != 0`을 참으로 평가**함. 그래서 `$7!=0{... n++}`이 헤더 줄도 세어버림. (`sum`/`max`는 `""`가 산술 문맥에서 0으로 강제변환되어 영향 없음 — 실측으로 확인.)
+- 영향 범위: `nonzero_blocks`만 헤더 줄 개수만큼 +됨 — `migtest`/`cbfix`/`diagcheck` 계열은 +1, `vpcdiag` 계열은 +7. `erase_cv`도 분모(blk_n)가 같이 늘어 아주 미세하게 틀림(0.2408 → 0.2406 수준). **모든 정책에 동일한 상수 오프셋이라 정책 간 비교/결론은 전혀 영향 없음**(CB-Greedy 차이는 3809로 정정 전후 완전히 동일). 헤더가 없던 시기의 run(uniform, filebench, v7rep2/3, final 등)은 애초에 영향 없음.
+- 해결: `run_experiment.sh`/`run_filebench_experiment.sh`의 awk에 `NF==7` 가드 추가. 영향받은 run들의 `summary.txt`를 고친 awk로 전부 재생성하고, 보고서/CLAUDE.md/EXPERIMENT_LOG.md의 `nonzero_blocks` 수치와 fig2 그래프를 정정값(Greedy 85,624 / CB 89,433 / Random 86,500)으로 갱신함.
+- 같이 한 검증 (결과의 신뢰도를 크게 높인 부분): `gc_migrate_pages / total_gc`(= 실제로 선택된 victim의 평균 vpc)를 진단이 독립적으로 계산한 `avg_greedy_vpc`/`avg_cb_vpc`와 대조함.
+  - Greedy 3회: 실제 선택 = `avg_greedy_vpc`와 소수점 3자리까지 완전 일치(80.707/78.142/77.171) → **Greedy의 힙은 항상 정확히 min-vpc line을 뽑고 있음이 실측으로 증명됨**(vpc는 `mark_page_invalid`가 매번 remove+insert로 정확히 갱신하므로 stale해질 수 없다는 분석과 일치).
+  - Cost-Benefit 3회: 실제 선택 = `avg_cb_vpc`와 소수점 3자리까지 완전 일치(89.925/86.706/87.716) → **힙 staleness 수정이 의도대로 동작해서, 실제로 뽑히는 line이 그 순간의 진짜 CB 최적 line임이 증명됨.**
+  - Random 3회: 실제 선택(≈187)이 greedy이론(≈8.9)·cb이론(≈10.0) 어느 쪽과도 안 맞음 → 무작위 선택이 맞게 동작.
+- 그 외 점검 결과 (문제 없음): 컴파일 경고 0건. `victim_line_set_pri()`(호출되면 `vpc`를 우선순위 값으로 덮어써서 상태를 파괴함)는 `pqueue_change_priority()`를 통해서만 호출되는데 그 함수를 conv_ftl.c에서 아무도 안 부르므로 도달 불가 — 안전. `pqueue_remove()`가 힙의 마지막 원소를 지우는 엣지케이스도 `cmppri(x,x)==false`라 percolate_down으로 빠져 안전. `ipc * age` 오버플로 여유 충분(최대 ~2e10, uint64 범위 내). victim pqueue에 들어가는 line은 전부 닫힌(=`mtime` 스탬프된) line이라 `age`가 비정상적으로 커지는 경로 없음.
+- 남은 알려진 한계 (수정 안 함, 문서화로 갈음): `gc_policy`를 sysfs로 런타임 전환하는 것은 **Cost-Benefit → Greedy 방향에서 안전하지 않음.** CB로 동작하는 동안 힙은 CB 우선순위로 정렬돼 있는데, Greedy로 바꾸면 `pqueue_pop()`이 그 정렬을 그대로 신뢰해서 min-vpc가 아닌 line을 뽑게 됨(그리고 스스로 복구되지 않음). 반대 방향(Greedy → CB)은 CB가 매번 전체 스캔을 하므로 안전. **본 벤치마크는 정책마다 항상 모듈을 완전 리로드하는 절차를 썼기 때문에 이번 측정 결과에는 영향 없음.** CLAUDE.md의 커맨드 레퍼런스에도 경고 추가함.

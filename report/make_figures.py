@@ -107,9 +107,14 @@ erase_max_raw = {
     "random": [11, 12, 11],
 }
 nonzero_raw = {
-    "greedy": [85555, 85683, 85655],
-    "costbenefit": [89443, 89443, 89435],
-    "random": [86415, 86559, 86547],
+    "greedy": [85548, 85676, 85648],
+    "costbenefit": [89436, 89436, 89428],
+    "random": [86408, 86552, 86540],
+}
+erase_cv_raw = {
+    "greedy": [0.2377, 0.2429, 0.2355],
+    "costbenefit": [0.2406, 0.2212, 0.2311],
+    "random": [0.4905, 0.4853, 0.4915],
 }
 lat_avg_ns_raw = {  # cold_touch+hot_churn 병합 그룹 (group_reporting)
     "greedy": [80847.929712, 80027.018639, 79687.931571],

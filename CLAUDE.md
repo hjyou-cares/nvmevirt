@@ -179,7 +179,11 @@ NVME_DEV=/dev/nvme1n1 MEMMAP_START=16G MEMMAP_SIZE=48G NVME_CPUS=7,8 \
 cat /sys/module/nvmev/parameters/gc_policy      # 현재 정책 확인 (0=Greedy, 1=Random, 2=Cost-Benefit)
 echo 1 | sudo tee /sys/module/nvmev/parameters/gc_policy   # 정책 전환
 ```
-`insmod` 시점에 `gc_policy=1`처럼 파라미터로 줘도 되지만, 이미 로드된 모듈에서 sysfs로 바로 바꾸는 게 더 편함 (정책별 재실험할 때 리로드 안 해도 됨).
+`insmod` 시점에 `gc_policy=1`처럼 파라미터로 줘도 되고, sysfs로 바로 바꿔도 되지만 — 아래 두 가지 이유로 **실제 벤치마크에는 항상 `insmod` 파라미터 + 완전 리로드를 쓸 것.**
+
+**⚠️ 경고 1 (측정 오염, 2026-07-27 발견)**: sysfs로 정책만 바꿔 이어서 돌리면 앞 정책이 남긴 FTL 내부 상태(`cb_clock`, write pointer, free line list, 각 line의 valid/invalid 분포)를 그대로 물려받아 비교가 오염됨. §1의 모듈 리로드 사이클 경고 참고.
+
+**⚠️ 경고 2 (Cost-Benefit → Greedy 전환은 정확성 자체가 깨짐, 2026-07-31 발견)**: Cost-Benefit으로 동작하는 동안 victim 힙은 CB 우선순위(`(ipc*age)/(2*vpc)`)로 정렬돼 있음. 여기서 Greedy로 바꾸면 Greedy는 `pqueue_pop()`으로 힙의 root를 그대로 신뢰하는데, 그 root는 min-vpc line이 아니라 CB 기준 1등임 → **Greedy가 조용히 잘못된 victim을 고르게 되고, 힙이 스스로 복구되지도 않음.** 반대 방향(Greedy → CB)은 CB가 매번 전체 스캔을 하므로 안전. 정책을 바꿀 땐 리로드가 정답.
 
 ### 3. GC를 실제로 유발시키는 랜덤 쓰기 부하 (스모크/스트레스 테스트용)
 같은 영역을 여러 번 덮어써서 invalid page를 계속 만들어야 GC가 트리거됨. 파일 크기보다 큰 총 쓰기량을 줘야 함.
@@ -198,8 +202,9 @@ echo reset | sudo tee /proc/nvmev/debug   # 모든 block의 erase_cnt를 0으로
 ```
 간단 통계 뽑기 예시:
 ```
-awk '$7!=0{sum+=$7; n++; if($7>max) max=$7} END {print "nonzero_blocks="n, "sum="sum, "max="max}' /proc/nvmev/debug
+awk 'NF==7 && $7!=0{sum+=$7; n++; if($7>max) max=$7} END {print "nonzero_blocks="n, "sum="sum, "max="max}' /proc/nvmev/debug
 ```
+**`NF==7` 가드 필수 (2026-07-31 발견)**: `/proc/nvmev/debug` 출력 맨 앞의 헤더 줄들(`GC_VALID_PAGE_MIGRATE_CNT`, `DIAG_*`)은 필드가 2개뿐이라 `$7`이 uninitialized인데, **mawk는 이를 문자열 `""`로 취급해 `"" != 0`을 참으로 평가**함 → 가드가 없으면 헤더 줄 개수만큼 `nonzero_blocks`가 부풀려짐(`sum`/`max`는 영향 없음).
 
 ---
 
@@ -355,11 +360,11 @@ awk '$7!=0{sum+=$7; n++; if($7>max) max=$7} END {print "nonzero_blocks="n, "sum=
   | migrate_pages/GiB | 48,493 ± 1,302 | 55,079 ± 1,198 | 134,288 ± 954 |
   | erase/GiB | 2,465.4 ± 8.9 | 2,500.2 ± 7.6 | 2,870.4 ± 6.4 |
   | erase max | 10.3 | 8.3 | 11.3 |
-  | nonzero_blocks | 85,631 | 89,440 | 86,507 |
+  | nonzero_blocks | 85,624 | 89,433 | 86,500 |
   | erase_cv | 0.239 | 0.231 | 0.489 |
   | latency avg | 80.2μs | 84.5μs | 152.4μs |
   | latency p99 | 432.1μs | 439.0μs | 1,521.0μs |
 
   3회 다 Greedy/CB range가 거의 안 겹침(노이즈 아님). `diag_scan_greedy_vs_cb`로 같이 잰 `avg_abs_vpc_diff`도 CB 구동 시 33.8(평균 vpc의 47.4%)로 작지 않아서, "다른 line을 골라도 비용은 비슷하다"가 아니라 "다르게 고르면 비용도 실제로 다르다"는 게 정량적으로 뒷받침됨.
-- **최종 결론(리포트 헤드라인)**: 지금까지(7/27~7/30 파트 3까지) 계속 봐온 "Greedy≈CB 수렴"은 힙 staleness 버그가 CB를 우연히 Greedy와 비슷하게 행동하게 만든 착시였음. 버그를 고치자 **Cost-Benefit은 총 migration 효율을 Greedy보다 13.6% 더 씀(latency도 약 5% 높음) 대신, 최대 마모(erase max)를 8.3으로 낮추고(Greedy 10.3) 마모를 더 많은 블록(89,440 vs 85,631)에 분산시킴** — Cost-Benefit GC의 교과서적 트레이드오프(총 효율 희생 ↔ 웨어 레벨링 개선)와 정확히 일치하는, 이 프로젝트에서 가장 깔끔한 결과. Random은 모든 지표에서 확실히 최악. (uniform 워크로드는 hot/cold 스큐가 없어서 이 버그와 무관하게 Greedy=CB로 항상 수렴함 — 이것도 리포트에서 "워크로드에 따른 차이"로 다룰 수 있는 포인트.)
+- **최종 결론(리포트 헤드라인)**: 지금까지(7/27~7/30 파트 3까지) 계속 봐온 "Greedy≈CB 수렴"은 힙 staleness 버그가 CB를 우연히 Greedy와 비슷하게 행동하게 만든 착시였음. 버그를 고치자 **Cost-Benefit은 총 migration 효율을 Greedy보다 13.6% 더 씀(latency도 약 5% 높음) 대신, 최대 마모(erase max)를 8.3으로 낮추고(Greedy 10.3) 마모를 더 많은 블록(89,433 vs 85,624)에 분산시킴** — Cost-Benefit GC의 교과서적 트레이드오프(총 효율 희생 ↔ 웨어 레벨링 개선)와 정확히 일치하는, 이 프로젝트에서 가장 깔끔한 결과. Random은 모든 지표에서 확실히 최악. (uniform 워크로드는 hot/cold 스큐가 없어서 이 버그와 무관하게 Greedy=CB로 항상 수렴함 — 이것도 리포트에서 "워크로드에 따른 차이"로 다룰 수 있는 포인트.)
 - **다음 할 일**: 그래프 작성 → 보고서 작성(uniform은 Greedy=CB 구조적 수렴 / hotcold는 CB의 웨어 레벨링 개선(총효율 트레이드오프 있음) / Random은 전 지표 열세 / filebench는 fio uniform 결론 재확인, 구도로 정리하되 **힙 staleness 버그 발견→수정 과정을 방법론 섹션에 포함**할 것) → 제출(hslee@davinci.snu.ac.kr, 7/31까지).

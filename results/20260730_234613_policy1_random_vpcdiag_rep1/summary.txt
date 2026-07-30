@@ -1,1 +1,1 @@
-nonzero_blocks=86415 sum=292180 max=11 gc_migrate_pages=13681992 total_gc=73045 greedy_vs_cb_identity_diverge=8692 avg_greedy_vpc=8.965 avg_cb_vpc=10.887 avg_abs_vpc_diff=1.922 same_vpc_different_line_ratio=0.0219 erase_cv=0.4906
+nonzero_blocks=86408 sum=292180 max=11 gc_migrate_pages=13681992 total_gc=73045 greedy_vs_cb_identity_diverge=8692 avg_greedy_vpc=8.965 avg_cb_vpc=10.887 avg_abs_vpc_diff=1.922 same_vpc_different_line_ratio=0.0219 erase_cv=0.4905
