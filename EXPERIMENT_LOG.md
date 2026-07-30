@@ -493,3 +493,9 @@
   - Random 3회: 실제 선택(≈187)이 greedy이론(≈8.9)·cb이론(≈10.0) 어느 쪽과도 안 맞음 → 무작위 선택이 맞게 동작.
 - 그 외 점검 결과 (문제 없음): 컴파일 경고 0건. `victim_line_set_pri()`(호출되면 `vpc`를 우선순위 값으로 덮어써서 상태를 파괴함)는 `pqueue_change_priority()`를 통해서만 호출되는데 그 함수를 conv_ftl.c에서 아무도 안 부르므로 도달 불가 — 안전. `pqueue_remove()`가 힙의 마지막 원소를 지우는 엣지케이스도 `cmppri(x,x)==false`라 percolate_down으로 빠져 안전. `ipc * age` 오버플로 여유 충분(최대 ~2e10, uint64 범위 내). victim pqueue에 들어가는 line은 전부 닫힌(=`mtime` 스탬프된) line이라 `age`가 비정상적으로 커지는 경로 없음.
 - 남은 알려진 한계 (수정 안 함, 문서화로 갈음): `gc_policy`를 sysfs로 런타임 전환하는 것은 **Cost-Benefit → Greedy 방향에서 안전하지 않음.** CB로 동작하는 동안 힙은 CB 우선순위로 정렬돼 있는데, Greedy로 바꾸면 `pqueue_pop()`이 그 정렬을 그대로 신뢰해서 min-vpc가 아닌 line을 뽑게 됨(그리고 스스로 복구되지 않음). 반대 방향(Greedy → CB)은 CB가 매번 전체 스캔을 하므로 안전. **본 벤치마크는 정책마다 항상 모듈을 완전 리로드하는 절차를 썼기 때문에 이번 측정 결과에는 영향 없음.** CLAUDE.md의 커맨드 레퍼런스에도 경고 추가함.
+
+### 2026-07-31 (후속 조치)
+- 무엇을: `conv_ftl.c`의 `module_param(gc_policy, uint, 0644)`를 `0444`(런타임 읽기 전용)로 변경.
+- 왜: 바로 위 항목에서 "남은 알려진 한계"로 문서화만 하고 넘어갔던 문제 — Cost-Benefit → Greedy 런타임 전환 시 Greedy가 CB 우선순위로 정렬된 힙의 root를 그대로 신뢰해 **에러 없이 조용히 잘못된 victim을 고르는** 문제 — 를 아예 발생 불가능하게 막음. 여기에 2026-07-27에 확인된 "정책만 바꿔 이어서 돌리면 FTL 내부 상태가 오염된다"는 문제까지 같은 조치로 함께 차단됨.
+- 영향 없음 확인: `insmod ./nvmev.ko ... gc_policy=N`은 sysfs를 거치지 않고 모듈 로드 시점에 커널이 직접 파싱하므로 **그대로 동작함**. `cat /sys/module/nvmev/parameters/gc_policy`(현재 정책 확인)도 읽기라 그대로 됨. 막히는 건 `echo N | sudo tee ...`(런타임 쓰기)뿐이고, `run_experiment.sh`/`run_filebench_experiment.sh`는 이미 insmod 파라미터 방식만 쓰므로 벤치마크 파이프라인은 무영향. 이번 측정 결과도 전부 완전 리로드로 얻은 것이라 재측정 불필요.
+- 검증: 재빌드 에러/경고 0건. CLAUDE.md의 커맨드 레퍼런스 §2를 "지정은 insmod 시점에만 가능"으로 갱신하고, 옛 sysfs 전환 안내가 남아있던 곳(코드 구조 요약, §1 리로드 사이클 경고)도 현재 동작에 맞게 정리함. 날짜별 진행 기록은 당시 사실이므로 그대로 둠.

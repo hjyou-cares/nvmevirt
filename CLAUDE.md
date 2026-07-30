@@ -36,7 +36,7 @@ NVMeVirt의 Conventional FTL(`conv_ftl.c`)에서 GC victim 선택 정책 3가지
 ## 코드 구조 요약 (핵심 함수 위치, conv_ftl.c 기준, 2026-07-24 Cost-Benefit 구현 후 줄번호 기준)
 - `gc_policy` (파일 상단): module_param, 0=Greedy/1=Random/2=Cost-Benefit. `enum gc_victim_policy`도 같이 정의됨. 바로 옆에 `cb_clock`(전역 논리 시계, Cost-Benefit용, 2026-07-24 추가)도 있음.
 - `victim_line_cmp_pri`(84줄), `victim_line_get_pri`(93줄), `victim_line_set_pri`(112줄), `victim_line_get_pos/set_pos`(117줄 근방): pqueue 콜백. `pqueue_init()`(`init_lines()` 안)에 등록됨.
-  - `victim_line_cmp_pri`(비교 함수, min-heap 방향 결정)와 `victim_line_get_pos/set_pos`는 **Random·Cost-Benefit 구현 후에도 안 건드림** (비교 함수까지 정책별로 바꾸면 `gc_policy`가 sysfs로 런타임 전환될 때 기존 힙 정렬이 깨질 위험이 있어서, 값 쪽에서만 정책별로 다르게 계산하는 방향으로 감).
+  - `victim_line_cmp_pri`(비교 함수, min-heap 방향 결정)와 `victim_line_get_pos/set_pos`는 **Random·Cost-Benefit 구현 후에도 안 건드림** (비교 함수까지 정책별로 바꾸면 정책이 바뀔 때 기존 힙 정렬이 통째로 무의미해질 위험이 있어서, 값 쪽에서만 정책별로 다르게 계산하는 방향으로 감. 참고로 2026-07-31부터 `gc_policy`가 런타임 읽기 전용이 돼서 "실행 중 전환" 시나리오 자체는 사라졌지만, 이 설계 판단은 그대로 유지함).
   - `victim_line_get_pri`는 **Cost-Benefit 구현 시 수정함**: `gc_policy==COST_BENEFIT`이면 `(ipc*age)/(2*vpc)`를 계산해서 뒤집어 리턴(`CB_PRI_MAX - bc`), 아니면 기존처럼 `vpc` 그대로 리턴.
   - `victim_line_set_pri`는 이제 죽은 코드 (더 이상 아무도 안 부름, 아래 `mark_page_invalid()` 항목 참고).
 - `consume_write_credit`, `check_and_refill_write_credit`: write credit 소진 시 `foreground_gc()` 트리거.
@@ -164,7 +164,7 @@ sudo chown $USER:$USER ~/nvme_mount
 로드 후 확인: `lsmod | grep nvmev`, `ls /dev/nvme0n1`
 **주의**: 리로드하면 `gc_policy`가 기본값(0=Greedy)으로 돌아가고 `erase_cnt`도 전부 0으로 초기화됨 — 재실험 시작 전 2번/4번 다시 확인할 것.
 
-**⚠️ 중요 (2026-07-27 발견): 정책 간 비교 실험에서는 정책마다 반드시 이 모듈 리로드 사이클을 처음부터 다시 거칠 것.** `mkfs`만 다시 해서는 부족함 — `cb_clock`(Cost-Benefit용 논리 시계), write pointer, free line list 같은 FTL 내부 상태는 `mkfs`로 안 지워지고 오직 `rmmod`→`insmod`로만 초기화됨. `gc_policy`를 sysfs로만 바꿔가며 이어서 실행하면, 뒤에 도는 정책이 앞 정책이 남긴 물리 상태를 그대로 물려받아 비교가 오염됨 (실제로 이 문제 때문에 첫 3정책 비교 결과가 무효 판정됨, EXPERIMENT_LOG.md 2026-07-27 참고). `insmod` 시 `gc_policy=<N>` 파라미터로 바로 원하는 정책을 줄 수 있음(§2 참고).
+**⚠️ 중요 (2026-07-27 발견): 정책 간 비교 실험에서는 정책마다 반드시 이 모듈 리로드 사이클을 처음부터 다시 거칠 것.** `mkfs`만 다시 해서는 부족함 — `cb_clock`(Cost-Benefit용 논리 시계), write pointer, free line list 같은 FTL 내부 상태는 `mkfs`로 안 지워지고 오직 `rmmod`→`insmod`로만 초기화됨. `gc_policy`를 sysfs로만 바꿔가며 이어서 실행하면, 뒤에 도는 정책이 앞 정책이 남긴 물리 상태를 그대로 물려받아 비교가 오염됨 (실제로 이 문제 때문에 첫 3정책 비교 결과가 무효 판정됨, EXPERIMENT_LOG.md 2026-07-27 참고). `insmod` 시 `gc_policy=<N>` 파라미터로 바로 원하는 정책을 줄 수 있음(§2 참고). **2026-07-31부터는 `gc_policy`를 아예 런타임 읽기 전용으로 막아서 이 실수 자체가 불가능해졌지만**(§2 참고), 왜 리로드가 필요한지는 알아둘 것.
 
 **업데이트 (2026-07-29)**: `scripts/run_experiment.sh`가 이 rmmod→insmod(gc_policy 지정)→mkfs→mount 전체를 매 실행마다 자동으로 수행하도록 수정됨 (이전 버전은 sysfs 전환 + mkfs만 했음 — 위 오염 문제가 스크립트 자체에도 남아있던 것을 뒤늦게 발견/수정함). 디바이스 경로와 insmod 파라미터는 `NVME_DEV`/`MEMMAP_START`/`MEMMAP_SIZE`/`NVME_CPUS` 환경변수로 오버라이드 가능 (기본값은 로컬 VM 기준). 서버 실행 예시:
 ```
@@ -174,16 +174,16 @@ NVME_DEV=/dev/nvme1n1 MEMMAP_START=16G MEMMAP_SIZE=48G NVME_CPUS=7,8 \
 
 **주의 (2026-07-24 발견)**: rmmod→insmod로 모듈을 리로드해도 `~/nvme_mount` 안의 파일(ext4 파일시스템 자체, 실제 파일 데이터)은 그대로 남아있음 — `erase_cnt` 같은 FTL 내부 통계(커널 힙에 매번 새로 할당됨)만 초기화되고, `memmap=`으로 예약된 물리 메모리 영역의 실제 바이트는 module reload로 지워지지 않는 것으로 보임. 정책 간 완전히 깨끗한 상태에서 비교하려면 리로드만으로는 부족하고 `mkfs`를 다시 해야 할 수도 있음 — 최종 벤치마크 설계 시 확인 필요.
 
-### 2. GC victim 정책 확인/전환 (모듈 리로드 없이 즉시 적용됨)
+### 2. GC victim 정책 지정/확인 (지정은 insmod 시점에만 가능)
 ```
+sudo insmod ./nvmev.ko memmap_start=... memmap_size=... cpus=... gc_policy=2   # 정책 지정
 cat /sys/module/nvmev/parameters/gc_policy      # 현재 정책 확인 (0=Greedy, 1=Random, 2=Cost-Benefit)
-echo 1 | sudo tee /sys/module/nvmev/parameters/gc_policy   # 정책 전환
 ```
-`insmod` 시점에 `gc_policy=1`처럼 파라미터로 줘도 되고, sysfs로 바로 바꿔도 되지만 — 아래 두 가지 이유로 **실제 벤치마크에는 항상 `insmod` 파라미터 + 완전 리로드를 쓸 것.**
+**`gc_policy`는 2026-07-31부터 런타임 읽기 전용(`module_param(..., 0444)`)임** — 예전처럼 `echo 1 | sudo tee /sys/module/nvmev/parameters/gc_policy`로 바꾸는 건 이제 `Permission denied`로 막힘. 읽기(`cat`)는 그대로 됨. 정책을 바꾸려면 §1의 모듈 리로드 사이클을 거쳐야 하고, `run_experiment.sh`는 이미 그렇게 동작함.
 
-**⚠️ 경고 1 (측정 오염, 2026-07-27 발견)**: sysfs로 정책만 바꿔 이어서 돌리면 앞 정책이 남긴 FTL 내부 상태(`cb_clock`, write pointer, free line list, 각 line의 valid/invalid 분포)를 그대로 물려받아 비교가 오염됨. §1의 모듈 리로드 사이클 경고 참고.
-
-**⚠️ 경고 2 (Cost-Benefit → Greedy 전환은 정확성 자체가 깨짐, 2026-07-31 발견)**: Cost-Benefit으로 동작하는 동안 victim 힙은 CB 우선순위(`(ipc*age)/(2*vpc)`)로 정렬돼 있음. 여기서 Greedy로 바꾸면 Greedy는 `pqueue_pop()`으로 힙의 root를 그대로 신뢰하는데, 그 root는 min-vpc line이 아니라 CB 기준 1등임 → **Greedy가 조용히 잘못된 victim을 고르게 되고, 힙이 스스로 복구되지도 않음.** 반대 방향(Greedy → CB)은 CB가 매번 전체 스캔을 하므로 안전. 정책을 바꿀 땐 리로드가 정답.
+읽기 전용으로 막은 이유 2가지:
+- **측정 오염 (2026-07-27 발견)**: 정책만 바꿔 이어서 돌리면 앞 정책이 남긴 FTL 내부 상태(`cb_clock`, write pointer, free line list, 각 line의 valid/invalid 분포)를 그대로 물려받아 비교가 오염됨 — 실제로 이것 때문에 첫 3정책 비교 결과가 통째로 무효 판정됨.
+- **정확성 자체가 깨짐 (2026-07-31 발견)**: Cost-Benefit으로 동작하는 동안 victim 힙은 CB 우선순위(`(ipc*age)/(2*vpc)`)로 정렬돼 있음. 여기서 Greedy로 바꾸면 Greedy는 `pqueue_pop()`으로 힙의 root를 그대로 신뢰하는데, 그 root는 min-vpc line이 아니라 CB 기준 1등임 → **Greedy가 에러 없이 조용히 잘못된 victim을 고르게 되고, 힙이 스스로 복구되지도 않음.** (반대 방향인 Greedy → CB는 CB가 매번 전체 스캔을 하므로 원래 안전했지만, 위 오염 문제는 여전히 있어서 양방향 다 막는 게 맞다고 판단함.)
 
 ### 3. GC를 실제로 유발시키는 랜덤 쓰기 부하 (스모크/스트레스 테스트용)
 같은 영역을 여러 번 덮어써서 invalid page를 계속 만들어야 GC가 트리거됨. 파일 크기보다 큰 총 쓰기량을 줘야 함.

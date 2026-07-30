@@ -16,7 +16,15 @@ enum gc_victim_policy {
 };
 
 static unsigned int gc_policy = GC_POLICY_GREEDY;
-module_param(gc_policy, uint, 0644);
+/* 0444 (read-only at runtime) on purpose: set this with an insmod parameter,
+ * never by writing to /sys/module/nvmev/parameters/gc_policy. Switching from
+ * Cost-Benefit to Greedy on a live module leaves the victim heap ordered by
+ * CB priority, and Greedy's pqueue_pop() trusts that order -- so it would
+ * silently stop returning the min-vpc line, with no error and no self-repair.
+ * (Switching policies also carries over FTL state -- cb_clock, the write
+ * pointer, the free line list -- which contaminated an earlier cross-policy
+ * comparison; see CLAUDE.md.) Reading it back is still allowed. */
+module_param(gc_policy, uint, 0444);
 MODULE_PARM_DESC(gc_policy, "GC victim selection policy: 0=Greedy, 1=Random, 2=Cost-Benefit");
 
 /* logical clock for Cost-Benefit GC: incremented once per page write.
