@@ -170,26 +170,32 @@ lat_p99, lat_p99_err = stats(lat_p99_us_raw)
 # filebench 87~90GiB) 워크로드 간 절대 높이 비교는 의미가 없음 -- 이 그림이
 # 보여주는 건 "같은 워크로드 안에서 정책별로 마모가 어떻게 퍼지는가"의 형태.
 # =====================================================================
+# 워크로드는 "Greedy와 CB의 선택이 갈린 비율"이 낮은 것부터 높은 순으로 배치한다
+# (0% -> 0% -> 90.3% -> 98.4%). 마모 분포가 그 순서대로 달라지는 게 이 그림의 요지.
 DIST_RUNS = {
-    "uniform\n(600 MiB file, 1.3% util.)": {
+    "uniform\n(0% divergence)": {
         "greedy": "20260731_110103_policy0_greedy_final31_rep1",
         "costbenefit": "20260731_110936_policy2_costbenefit_final31_rep1",
         "random": "20260731_110520_policy1_random_final31_rep1"},
-    "hotcold v7\n(separated hot / cold)": {
+    "zoned 80:20\n(0% divergence)": {
+        "greedy": "20260731_144530_policy0_greedy_zoned",
+        "costbenefit": "20260731_144938_policy2_costbenefit_zoned",
+        "random": "20260731_144726_policy1_random_zoned"},
+    "hotcold v7\n(90.3% divergence)": {
         "greedy": "20260730_231827_policy0_greedy_vpcdiag_rep1",
         "costbenefit": "20260730_232507_policy2_costbenefit_vpcdiag_rep1",
         "random": "20260730_234613_policy1_random_vpcdiag_rep1"},
-    "filebench\n(2 GiB, randwrite + fsync)": {
-        "greedy": "20260731_111951_policy0_greedy_final31_filebench",
-        "costbenefit": "20260731_112358_policy2_costbenefit_final31_filebench",
-        "random": "20260731_112155_policy1_random_final31_filebench"},
+    "zipf:1.2\n(98.4% divergence)": {
+        "greedy": "20260731_141803_policy0_greedy_zipf",
+        "costbenefit": "20260731_142151_policy2_costbenefit_zipf",
+        "random": "20260731_141953_policy1_random_zipf"},
 }
 
 dist = {wl: {p: load_erase(r) for p, r in runs.items()} for wl, runs in DIST_RUNS.items()}
 wls = list(DIST_RUNS.keys())
 GROUP_W, MARK_W = 0.72, 0.20
 
-fig, (ax_a, ax_b) = plt.subplots(2, 1, figsize=(11, 8.6),
+fig, (ax_a, ax_b) = plt.subplots(2, 1, figsize=(13.5, 8.6),
                                  gridspec_kw={"height_ratios": [1.55, 1]})
 
 for gi, wl in enumerate(wls):
@@ -251,10 +257,50 @@ ax_b.spines[["top", "right", "left"]].set_visible(False)
 ax_b.set_title(f"Share of the {TOTAL_BLOCKS:,} physical blocks that were erased at least once",
                color=INK_PRIMARY, fontsize=11.5, pad=10, loc="left")
 
-fig.suptitle("Per-block wear distribution by workload and GC policy",
-             fontsize=13.5, color=INK_PRIMARY, x=0.055, ha="left", y=0.985)
+fig.suptitle("Per-block wear distribution by workload and GC policy "
+             "(workloads ordered by how often Greedy and Cost-Benefit disagree)",
+             fontsize=13.5, color=INK_PRIMARY, x=0.045, ha="left", y=0.985)
 fig.tight_layout(rect=[0, 0, 1, 0.955])
 save(fig, "fig1_wear_distribution")
+
+# =====================================================================
+# Fig 2: zipf 워크로드 최종 비교 (핵심 결과, 3회 반복)
+# 세 정책 모두 loops 기반이라 정확히 같은 바이트(154.0 GiB)를 기록하므로
+# GiB 정규화 없이 raw 값을 그대로 비교할 수 있다.
+# =====================================================================
+def collect_runs(patterns):
+    """results/<pattern> 들에서 정책별 지표 리스트를 모은다."""
+    out = {}
+    for pat in patterns:
+        for d in sorted(glob.glob(os.path.join(REPO_ROOT, "results", pat))):
+            meta = dict(l.strip().split("=", 1) for l in open(os.path.join(d, "meta.txt")) if "=" in l)
+            s = dict(kv.split("=", 1) for kv in open(os.path.join(d, "summary.txt")).read().split())
+            w = json.load(open(os.path.join(d, "fio.json")))["jobs"][0]["write"]
+            out.setdefault(meta["policy_name"], []).append(dict(
+                mx=int(s["max"]), cv=float(s["erase_cv_all"]),
+                mig=int(s["gc_migrate_pages"]), erase=int(s["sum"]),
+                lat=w["lat_ns"]["mean"] / 1000,
+                p99=w["clat_ns"]["percentile"]["99.000000"] / 1000))
+    return out
+
+
+zipf = collect_runs(["*_zipf", "*_zipf_rep*"])
+pick = lambda key: {p: [r[key] for r in zipf[p]] for p in ORDER}
+
+fig, axes = plt.subplots(1, 4, figsize=(17.5, 4.3))
+for ax, key, title, ylab, fmt in [
+    (axes[0], "mx", "Peak wear: highest erase count of any block", "erase max", "{:.1f}"),
+    (axes[1], "cv", "Wear evenness (lower = more even)", "erase CV over all blocks", "{:.3f}"),
+    (axes[2], "mig", "GC migration cost", "valid pages migrated", "{:,.0f}"),
+    (axes[3], "p99", "p99 tail write latency", "latency p99 (us)", "{:.1f}"),
+]:
+    m, e = stats(pick(key))
+    bar_panel(ax, m, e, title, ylab, fmt)
+
+fig.suptitle("zipf:1.2 - Cost-Benefit nearly halves peak wear at no migration cost "
+             "(mean +- sd of 3 runs; all policies wrote exactly 154.0 GiB)",
+             fontsize=13, color=INK_PRIMARY, y=1.03)
+save(fig, "fig2_zipf_comparison")
 
 # =====================================================================
 # Fig 2: hotcold v7 최종 비교 (fix 적용 후, 3회 반복) — migration/erase 효율
@@ -266,7 +312,7 @@ bar_panel(axes[1], erase_gib, erase_gib_err,
           "Block erases per GiB written", "erases / GiB", "{:.1f}")
 fig.suptitle("hotcold v7 — GC efficiency (after bug fix, mean ± sd of 3 runs)",
              fontsize=13, color=INK_PRIMARY, y=1.03)
-save(fig, "fig2_hotcold_efficiency")
+save(fig, "fig3_hotcold_efficiency")
 
 # =====================================================================
 # Fig 3: hotcold v7 — 웨어 레벨링 (erase max, nonzero_blocks)
@@ -278,7 +324,7 @@ bar_panel(axes[1], nonzero, nonzero_err,
           "Blocks erased at least once", "nonzero blocks", "{:.0f}")
 fig.suptitle("hotcold v7 — wear leveling (after bug fix, 3 runs)",
              fontsize=13, color=INK_PRIMARY, y=1.03)
-save(fig, "fig3_hotcold_wear_leveling")
+save(fig, "fig4_hotcold_wear_leveling")
 
 # =====================================================================
 # Fig 4: hotcold v7 — latency
@@ -288,7 +334,7 @@ bar_panel(axes[0], lat_avg, lat_avg_err, "Average write latency", "latency avg (
 bar_panel(axes[1], lat_p99, lat_p99_err, "p99 tail write latency", "latency p99 (us)", "{:.0f}")
 fig.suptitle("hotcold v7 — host IO latency (after bug fix, 3 runs)",
              fontsize=13, color=INK_PRIMARY, y=1.03)
-save(fig, "fig4_hotcold_latency")
+save(fig, "fig5_hotcold_latency")
 
 # =====================================================================
 # Fig 5: uniform 비교 (raw, 정규화 불필요 — 항상 동일 바이트 기록)
@@ -320,7 +366,7 @@ bar_panel(axes[2], uni_max, uni_max_err, "Peak wear: highest erase count", "eras
 fig.suptitle("uniform — Greedy and Cost-Benefit converge structurally (migrate = 0); "
              "Random trades off (3 runs)",
              fontsize=13, color=INK_PRIMARY, y=1.03)
-save(fig, "fig5_uniform_comparison")
+save(fig, "fig6_uniform_comparison")
 
 # =====================================================================
 # Fig 6: uniform 사용률 스윕 — 디바이스를 채우면 두 정책이 갈리기 시작하는가
@@ -399,7 +445,7 @@ fig.text(0.5, -0.055,
 
 fig.suptitle("uniform utilization sweep - filling the device does not make the policies diverge",
              fontsize=13, color=INK_PRIMARY, y=1.02)
-save(fig, "fig6_utilization_sweep")
+save(fig, "fig7_utilization_sweep")
 
 # =====================================================================
 # Fig 8: filebench 비교 (1회 측정, 보조 데이터)
@@ -418,7 +464,7 @@ bar_panel(axes[3], fb_nonzero, None, "Blocks erased at least once", "nonzero blo
 fig.suptitle("Filebench — secondary benchmark confirming the fio result "
              "(single run, final build, 2 GiB / 120 s / 4 threads)",
              fontsize=13, color=INK_PRIMARY, y=1.03)
-save(fig, "fig8_filebench_comparison")
+save(fig, "fig9_filebench_comparison")
 
 # =====================================================================
 # Fig 9: vpc divergence 분석 (diag_scan_greedy_vs_cb, 3회 반복 평균)
@@ -482,7 +528,7 @@ ax2.margins(y=0.2)
 fig.suptitle("Victim divergence — when the two policies pick different lines, "
              "does the cost (vpc) differ too?",
              fontsize=13, color=INK_PRIMARY, y=1.04)
-save(fig, "fig9_vpc_divergence")
+save(fig, "fig10_vpc_divergence")
 
 # =====================================================================
 # Fig 10 (보너스): 힙 staleness 버그 수정 전/후 — Cost-Benefit의 migrate_pages/GiB
@@ -512,7 +558,7 @@ ax.set_title("Cost-Benefit migration cost, before and after the heap staleness f
 ax.spines[["top", "right", "left"]].set_visible(False)
 ax.grid(axis="x", visible=False)
 ax.margins(y=0.22)
-save(fig, "fig10_bugfix_before_after")
+save(fig, "fig11_bugfix_before_after")
 
 # =====================================================================
 # Fig 7: 워크로드가 정책 차이를 만드는가 — uniform vs hotcold 대비
@@ -561,6 +607,6 @@ for ax in axes:
 fig.suptitle("The workload decides whether the policies can differ — "
              "under uniform they are provably identical",
              fontsize=13, color=INK_PRIMARY, y=1.04)
-save(fig, "fig7_workload_decides")
+save(fig, "fig8_workload_decides")
 
 print("done.")
