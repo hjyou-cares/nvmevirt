@@ -46,6 +46,16 @@ HOT_SIZE="${HOT_SIZE:-1G}"
 HOTCOLD_RUNTIME="${HOTCOLD_RUNTIME:-90}"
 export COLD_SIZE COLD_TOUCH_SIZE HOT_SIZE HOTCOLD_RUNTIME
 
+# uniform 워크로드 전용 (2026-07-31 파라미터화). 기본값 600M/250은 기존 결과와의
+# 재현성을 위해 그대로 유지함 -- 서버 용량 44.86GiB 기준 워킹셋이 1.3%밖에 안 되는
+# 조건이라, GC victim이 사실상 전부 vpc=0("고를 것이 없는" 상태)이 되어 Greedy와
+# Cost-Benefit이 구조적으로 완전히 수렴함(2026-07-31 uniformdiag에서 divergence 0회,
+# migrate 0페이지로 확인). 이 수렴이 "워킹셋이 작아서"임을 통제된 실험으로 보이려면
+# UNIFORM_SIZE를 키워 디바이스 사용률을 올린 조건을 같이 측정해야 함.
+#   예) UNIFORM_SIZE=22G UNIFORM_LOOPS=7  -> 사용률 약 49%, 총 154GiB 기록
+UNIFORM_SIZE="${UNIFORM_SIZE:-600M}"
+UNIFORM_LOOPS="${UNIFORM_LOOPS:-250}"
+
 case "$POLICY" in
   0) POLICY_NAME=greedy ;;
   1) POLICY_NAME=random ;;
@@ -89,9 +99,9 @@ if [ "$WORKLOAD" = "uniform" ]; then
   # 로컬 VM보다 훨씬 커서(로컬 32KB vs 서버 ~360KB), 로컬 VM 기준으로 잡았던
   # loops=10(총 6GB)로는 용량의 13%밖에 못 채워 GC가 전혀 안 돌았음(2026-07-29 확인).
   # loops=250이면 총 146GB(용량의 약 3.3배)를 써서 GC가 확실히 여러 번 트리거됨.
-  FIO_CMD="fio --name=gc_stress --filename=\$MOUNT_DIR/testfile2 --size=600M --rw=randwrite --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=250 --group_reporting"
-  fio --name=gc_stress --filename="$MOUNT_DIR/testfile2" --size=600M --rw=randwrite \
-      --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=250 \
+  FIO_CMD="fio --name=gc_stress --filename=\$MOUNT_DIR/testfile2 --size=$UNIFORM_SIZE --rw=randwrite --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=$UNIFORM_LOOPS --group_reporting"
+  fio --name=gc_stress --filename="$MOUNT_DIR/testfile2" --size="$UNIFORM_SIZE" --rw=randwrite \
+      --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops="$UNIFORM_LOOPS" \
       --group_reporting --output-format=json --output="$OUTDIR/fio.json"
 else
   FIO_CMD="COLD_SIZE=$COLD_SIZE COLD_TOUCH_SIZE=$COLD_TOUCH_SIZE HOT_SIZE=$HOT_SIZE HOTCOLD_RUNTIME=$HOTCOLD_RUNTIME fio $REPO_ROOT/scripts/workloads/hotcold.fio --directory=\$MOUNT_DIR"
@@ -146,6 +156,8 @@ awk '
   echo "policy_name=$POLICY_NAME"
   echo "label=$LABEL"
   echo "workload=$WORKLOAD"
+  echo "uniform_size=$UNIFORM_SIZE"
+  echo "uniform_loops=$UNIFORM_LOOPS"
   echo "cold_size=$COLD_SIZE"
   echo "cold_touch_size=$COLD_TOUCH_SIZE"
   echo "hot_size=$HOT_SIZE"
