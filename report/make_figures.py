@@ -51,6 +51,7 @@ RUNS = {
     "uniform600m": ["*final31_rep*"],
     "uniform22g": ["*util50*"],
     "uniform38g": ["*util80*"],
+    "extreme": ["*extreme_zipf1tb"],
 }
 
 
@@ -278,5 +279,68 @@ fig.suptitle("Filling the device does not create a choice for the victim selecto
              fontsize=13, color=INK_PRIMARY, y=1.02)
 fig.tight_layout()
 save(fig, "fig5_utilization_sweep")
+
+# =====================================================================
+# 그림 6 (4.4): 장기 정상상태. zipf 조건은 그대로 두고 총 쓰기량만
+# 154 GiB -> 1,100 GiB로 늘렸을 때 두 정책이 갈라지는 모습.
+# 왼쪽은 131,072개 블록의 마모 분포 원본(집계값 아님), 오른쪽은 쓰기량에 따른
+# migration 비용 변화. 이 조건은 Random을 돌리지 않아 두 정책만 그린다.
+# =====================================================================
+EXT = {p: os.path.basename(DATA["extreme"][p][0]["dir"])
+       for p in ("greedy", "costbenefit")}
+
+fig, axes = plt.subplots(1, 2, figsize=(12.5, 4.6))
+
+ax = axes[0]
+bins = np.arange(0, 175, 5)
+for pol in ("greedy", "costbenefit"):
+    arr = load_erase(EXT[pol])
+    ax.hist(arr, bins=bins, color=COLOR[pol], alpha=0.62, zorder=3,
+            label=f"{LABEL[pol]}  (max {arr.max()})")
+    ax.axvline(arr.max(), color=COLOR[pol], linewidth=1.4, linestyle="--", zorder=4)
+ax.set_yscale("log")
+ax.set_xlabel("Erase count per block")
+ax.set_ylabel("Number of blocks (log scale)")
+ax.tick_params(axis="both", length=0)
+ax.spines[["top", "right", "left"]].set_visible(False)
+ax.grid(axis="x", visible=False)
+ax.legend(loc="upper right", frameon=False, fontsize=10, labelcolor=INK_SECONDARY,
+          handlelength=1.1, handleheight=1.1)
+ax.set_title("Wear distribution over all 131,072 blocks", loc="left",
+             fontsize=11.5, pad=10, color=INK_PRIMARY)
+
+ax = axes[1]
+STAGE = [("zipf", "154 GiB written"), ("extreme", "1,100 GiB written")]
+xs, w = np.arange(len(STAGE)), 0.28
+for pi, pol in enumerate(("greedy", "costbenefit")):
+    vals = [ms(k, pol, "mig_gib")[0] for k, _ in STAGE]
+    ax.bar(xs + (pi - 0.5) * w, vals, width=w, color=COLOR[pol], label=LABEL[pol],
+           zorder=3, edgecolor=SURFACE, linewidth=2.0)
+    for x, v in zip(xs + (pi - 0.5) * w, vals):
+        ax.annotate(f"{v:,.0f}", xy=(x, v), xytext=(0, 4), textcoords="offset points",
+                    ha="center", fontsize=9.5, color=INK_SECONDARY)
+gap = [(ms(k, "costbenefit", "mig_gib")[0] / ms(k, "greedy", "mig_gib")[0] - 1) * 100
+       for k, _ in STAGE]
+for x, g, _n in zip(xs, gap, STAGE):
+    ax.annotate(f"Cost-Benefit {g:+.1f}%", xy=(x, 0), xytext=(0, -22),
+                textcoords="offset points", ha="center", fontsize=10,
+                color=INK_SECONDARY)
+ax.set_xticks(xs)
+ax.set_xticklabels([n for _, n in STAGE], fontsize=10.5)
+ax.set_ylabel("valid pages migrated / GiB written")
+ax.tick_params(axis="both", length=0)
+ax.spines[["top", "right", "left"]].set_visible(False)
+ax.grid(axis="x", visible=False)
+ax.margins(y=0.24)
+ax.legend(loc="upper left", frameon=False, fontsize=10, labelcolor=INK_SECONDARY,
+          handlelength=1.1, handleheight=1.1)
+ax.set_title("GC cost as the run gets longer", loc="left",
+             fontsize=11.5, pad=10, color=INK_PRIMARY)
+
+fig.suptitle("Over a long run the two policies separate: same total wear, "
+             "very different peak wear",
+             fontsize=13, color=INK_PRIMARY, x=0.055, ha="left", y=1.0)
+fig.tight_layout(rect=[0, 0, 1, 0.94])
+save(fig, "fig6_extreme_writes")
 
 print("done.")

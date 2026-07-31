@@ -1,3 +1,22 @@
+> ## 📄 실습 1 제출물 안내
+>
+> 이 저장소는 [snu-csl/nvmevirt](https://github.com/snu-csl/nvmevirt)를 fork하여 **실습 1: GC victim 선택 정책(Greedy / Random / Cost-Benefit) 구현 및 성능 비교**를 수행한 결과입니다.
+> 제출자: **유형진 (인턴)**
+>
+> | 항목 | 위치 |
+> |---|---|
+> | **보고서 (제출본)** | [`report/REPORT.pdf`](report/REPORT.pdf) — 같은 내용의 [HTML](report/REPORT.html) / [Markdown](report/REPORT.md) 원본도 함께 있습니다 |
+> | 보고서 그래프 | [`report/figures/`](report/figures) (fig1~fig6) |
+> | 구현 코드 | [`conv_ftl.c`](conv_ftl.c) / [`conv_ftl.h`](conv_ftl.h) (정책 구현), [`main.c`](main.c) (`/proc/nvmev/debug` 측정 인터페이스) |
+> | 실험 스크립트 | [`scripts/`](scripts) |
+> | 실험 결과 원본 | [`results/`](results) (실행별 `summary.txt` / `meta.txt` / `fio.json`) |
+> | 파일 구성 상세 · 빌드/실행 방법 | [`report/SUBMISSION_README.txt`](report/SUBMISSION_README.txt) |
+> | 실험 진행 기록 (시행착오와 판단 근거) | [`EXPERIMENT_LOG.md`](EXPERIMENT_LOG.md) |
+>
+> 아래는 원본 NVMeVirt 저장소의 README입니다.
+
+---
+
 # NVMeVirt
 
 ## Introduction

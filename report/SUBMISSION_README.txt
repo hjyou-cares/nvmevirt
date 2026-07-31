@@ -1,7 +1,7 @@
 실습 1: NVMeVirt Cost-Benefit GC 구현 및 성능 분석
 ====================================================
 
-제출자: (이름/학번 기입)
+제출자: 유형진 (인턴)
 제출일: 2026-07-31
 
 원본 저장소: https://github.com/snu-csl/nvmevirt
@@ -10,9 +10,10 @@
 
 1. 보고서
 ---------
-report/REPORT.docx    <- 제출용 보고서 (Word)
-report/REPORT.md      <- 같은 내용의 원본 (Markdown)
-report/figures/       <- 보고서에 실린 그래프 10장 (fig1~fig10)
+report/REPORT.pdf      <- 제출용 보고서 (REPORT.html을 브라우저에서 변환)
+report/REPORT.html     <- 그림까지 포함한 단일 HTML (report/make_html.sh로 생성)
+report/REPORT.md       <- 같은 내용의 원본 (Markdown)
+report/figures/        <- 보고서에 실린 그래프 6장 (fig1~fig6)
 report/make_figures.py <- 그래프 생성 스크립트 (results/의 실측값에서 직접 계산)
 
 
