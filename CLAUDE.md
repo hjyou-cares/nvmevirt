@@ -385,3 +385,84 @@ awk 'NF==7 && $7!=0{sum+=$7; n++; if($7>max) max=$7} END {print "nonzero_blocks=
 2. ~~uniform과 filebench만 최종 빌드로 재실행~~ → **완료**: uniform `final31_rep1/2/3`(정책 3종×3회, 9회) + filebench `final31`(정책 3종×1회) 전부 최종 빌드로 재실행함. uniform 결과: Greedy=CB가 migration/erase 전부 3회 동일 수렴(migrate=0, sum=271620, max=161) 재확인, Random만 다름(migrate≈170,989, sum=273,380, max≈9.7). filebench 결과: GiB당 정규화 시 Greedy 1355.3/CB 1379.7/Random 1463.8 erases/GiB, migration은 Greedy·CB 둘 다 0이고 Random만 8590.8 — uniform과 동일한 "스큐 없으면 구조적 수렴" 패턴이 fio 외 도구에서도 재현됨.
 3. ~~새 수치로 `report/make_figures.py`의 raw 배열 갱신 → 그래프 재생성 → `REPORT.md` 표/본문 갱신~~ → **완료**. `make_figures.py`의 uniform(fig4, migration 패널 추가로 3패널화)·filebench(fig5, migration 패널 추가로 4패널화) 데이터 교체 후 전체 그래프 재생성, `REPORT.md` 4.2/4.3절 표·본문 갱신 — 이제 리포트 전체가 단일(최종) 빌드 데이터로 통일됨.
 4. **남은 건 제출뿐** (hslee@davinci.snu.ac.kr) — 제출물: 코드 + `report/REPORT.md` + `report/figures/*.png`. 제출 전 `report/REPORT.md` 전체를 한 번 통독해서 문장 매끄러움만 확인할 것.
+
+## 진행 상황 (2026-07-31 파트 2 — 사용률 스윕 / zipf·zoned 추가 측정 / Codex 교차검증)
+
+7/31 오전에 "제출만 남았다"고 정리한 뒤, 사용자가 다른 수강생 결과와 비교해보고 워크로드를 더 돌려보기로 하면서 실험이 크게 확장된 세션. **결론이 바뀌었으므로 이전 섹션의 결론보다 이 섹션이 우선한다.**
+
+### 스크립트 파라미터화
+- `run_experiment.sh`의 uniform 워크로드에 `UNIFORM_SIZE`(기본 600M) / `UNIFORM_LOOPS`(기본 250) 추가. 기본값은 기존 결과 재현성을 위해 그대로 둠.
+- 같은 스크립트에 `RANDOM_DIST` 추가 — fio `--random_distribution`으로 그대로 전달. 비워두면 기본(균등). 파일 크기·총 쓰기량을 고정한 채 **접근 분포만** 바꾸는 대조 실험이 가능해짐.
+- `meta.txt`에 `uniform_size` / `uniform_loops` / `random_dist` 기록되도록 반영.
+
+### 사용률 스윕 — "용량 때문에 수렴한다"는 가설 기각 (중요)
+uniform이 Greedy=CB로 수렴하는 이유를 그동안 "워킹셋이 1.3%뿐이라 디바이스가 텅 비어서"로 **추론만** 하고 있었음. 파일 크기만 키워(총 쓰기량은 146\~154 GiB로 고정) 검증:
+
+| 파일 (사용률) | Greedy | Cost-Benefit | Random | Greedy↔CB 불일치 |
+|---|---|---|---|---|
+| 600 MiB (1.3%) | 0 | 0 | 1,167 | 0회 |
+| 22 GiB (49%) | 0 | 0 | 1,434 | 0회 |
+| 38 GiB (85%) | 0 | 0 | **3,363** | 0회 |
+
+*(GiB당 이동한 valid page 수. 600M·22G는 3회 반복, 38G는 1회)*
+
+- **85%까지 채워도 Greedy·CB는 valid page를 하나도 안 옮기고 선택도 한 번도 안 갈림.** 가설 기각.
+- **Random이 대조군 역할**: 같은 후보 풀에서 migration 비용이 2.9배로 증가 → GC는 실제로 어려워졌고 valid page 남은 line도 늘어났음. 그런데도 min-vpc를 고르는 Greedy는 언제나 완전히 죽은 line을 찾아냄.
+- 이유: 실효 over-provisioning이 여전히 큼(물리 48 GiB / 라이브 22 GiB = 2.18배). 22G 시점에서 Random victim의 평균 valid page가 2.99개(line당 359페이지 중 0.8%)에 불과 — 거의 모든 line이 이미 죽어 있었음.
+
+### zipf:1.2 — 이 프로젝트에서 가장 뚜렷한 결과 (헤드라인)
+22 GiB 파일 + `random_distribution=zipf:1.2` + loops=7 (총 154 GiB, 세 정책 모두 동일 바이트 → 정규화 불필요). 각 3회 반복:
+
+| 지표 | Greedy | Cost-Benefit | Random |
+|---|---|---|---|
+| 최대 erase (peak wear) | 11.0 ± 1.0 | **6.0 ± 0.0** | 12.0 ± 0.0 |
+| GiB당 erase | 1,970 ± 3 | 1,968 ± 5 | 2,083 ± 13 |
+| GiB당 migration | 6,029 ± 66 | **5,963 ± 102** | 17,021 ± 886 |
+| latency 평균 / p99 | 42.9 / 97.8 μs | 42.9 / 100.5 μs | 45.7 / 131.6 μs |
+| Greedy↔CB 불일치 | — | **98.7%** | — |
+
+- **CB가 최대 마모를 45.5% 낮추면서 migration 비용은 오히려 1.1% 적음.** 원시값이 완전히 분리됨(Greedy `[10,11,12]` vs CB `[6,6,6]`).
+- 메커니즘: CB 구동 시 `avg_greedy_vpc=5.95` vs `avg_cb_vpc=12.12` — **CB가 일부러 2배 비싼(=오래된 콜드) line을 고름.** 다만 Greedy도 자기 운영 상태에서는 평균 12.2짜리를 회수하게 되므로 총비용은 비슷하게 수렴.
+- hotcold(peak wear −19.4%, migration +13.6%)보다 효과가 크고 대가는 없음 → **리포트 헤드라인을 hotcold에서 zipf로 교체함.**
+
+### zoned 80:20 — "스큐만 있으면 된다"도 기각
+zipf와 파일 크기·총 쓰기량을 동일하게 두고 분포만 `zoned:80/20:20/80`으로 교체(1회 측정):
+- Greedy·CB가 erase 총합 292,748로 **완전 동일**, migrate 0, 불일치 0%.
+- 원인: zoned의 "콜드" 영역(파일의 80%, 17.6 GiB)이 전체 쓰기의 20%인 30.8 GiB를 받아 **평균 1.75회씩 덮어써짐** → 느릴 뿐 결국 전부 무효화됨. zipf는 멱법칙 꼬리라 **거의 안 쓰이는 페이지가 실제로 존재**함.
+
+### 최종 결론 (이전 섹션의 결론을 대체)
+7개 조건(uniform 3종 + zoned + filebench + zipf + hotcold)의 진단 결과가 두 부류로 정확히 갈림:
+- **vpc=0만 후보인 경우**(uniform 1.3/49/85%, zoned, filebench): 불일치 0%, 결과 완전 동일. 고를 여지 자체가 없음.
+- **vpc>0 후보가 있는 경우**(hotcold 90.3%, zipf 98.7%): 선택이 갈리고 마모 분산 효과 발생. 불일치 비율이 높을수록 효과도 큼.
+
+**→ Cost-Benefit의 이점 조건은 디바이스 사용률도, 접근 스큐의 유무도 아니라 "GC 회수 시점까지 valid 상태로 살아남는 데이터가 존재하는가"임.** (단, 이 실험 범위 — 단일 디바이스 구성, 4KB 랜덤쓰기, 146\~154 GiB — 에 한정된 관찰로 리포트에 명시함.)
+
+### Codex 교차검증 (`hjyou-cares/nvmevirt2`)
+사용자가 GPT Codex에게 저장소를 새로 clone해 정책을 독립 구현시킴. 실측은 아직 0건이지만 코드 비교 결과:
+
+**독립적으로 일치한 5가지** — 내 판단이 자의적이지 않았다는 근거:
+1. **Cost-Benefit에서 힙을 믿지 않고 큐 전체 스캔** (내가 "힙 staleness"라 부른 문제). Codex는 아예 CB 점수를 `victim_line_get_pri()`에 넣지 않아 힙을 항상 vpc 순으로만 유지 — **내 방식보다 깔끔함**(문제가 생길 구조 자체를 안 만듦).
+2. `vpc==0` 즉시 최우선 victim 가드
+3. Random을 `pq->d[]` 스캔 + `pqueue_remove()`로 구현
+4. `gc_policy`를 런타임 읽기 전용(0444)으로
+5. GC가 옮긴 페이지 수 / GC 횟수 카운터
+
+**Codex가 더 잘한 것**: `pqueue_remove()`의 원본 결함 수정 — 제거된 노드의 `pos`를 0으로 안 만들고(마지막 원소 제거 시 `percolate_down`이 stale 값을 남김), 큐에 없는 원소(`posn==0`)를 넘기면 `q->d[0]`이 손상됨. **내 코드는 세 호출부 모두 직후에 `pqueue_insert` 또는 명시적 `pos=0`이 따라와서 이 버그를 안 밟지만**, 라이브러리 자체는 고치는 게 맞음.
+
+**진짜 다른 것 — age 정의** (결과가 달라질 수 있는 유일한 지점):
+- 내 구현: `cb_clock - mtime` (논리 시계, line이 **닫힌 시점** 기준)
+- Codex: `ktime_get_ns() - last_invalidated_ns` (벽시계, **마지막 무효화 시점** 기준 — 무효화될 때마다 리셋됨)
+- **유지하기로 결정**: (a) 고전 정의(LFS/Kawaguchi)의 age는 "세그먼트가 쓰인 뒤 지난 시간"이라 내 쪽이 더 부합, (b) 논리 시계는 결정론적이라 반복측정이 완전히 재현됨(uniform 3회 erase 271,620 동일), (c) 마감 당일에 30여 런과 3.4절 검증을 전부 재실행해야 함.
+
+### 도구/환경 메모
+- **`report/finalize_docx.py` 신설**: pandoc이 표의 첫 행에 `<w:tblHeader/>`를 안 넣어서, 표가 페이지를 넘기면 둘째 페이지부터 머리행 없이 숫자만 이어짐. docx를 후처리해 표 7개 전부 "제목 행 반복" 지정. **REPORT.docx를 다시 만들 때마다 `python3 report/finalize_docx.py`를 한 번 돌릴 것.**
+- **로컬 PC(WSL2) 환경**: `pandoc`은 `sudo apt install -y pandoc`으로 설치. matplotlib은 없어서 `pip install --user matplotlib`으로 설치(venv는 `ensurepip` 부재로 실패). **한글 CJK 폰트가 없음** — WSL이라 `/mnt/c/Windows/Fonts/malgun.ttf`(맑은 고딕)를 쓸 수 있지만, **그래프 텍스트를 전부 영어로 바꿔서 폰트 의존성 자체를 없앰**(서버/로컬 어디서 렌더링해도 동일).
+- **로컬 PC에 git identity가 없었음** → `git config user.name/user.email`을 이 저장소에만 설정(기존 커밋과 동일한 `hjyou-cares <hjyoucau911@gmail.com>`).
+- 그림 검토용으로 `C:\Users\hjyou\Downloads\nvmevirt_figures\`에 PNG를 복사해가며 진행함 (사용자가 Windows에서 열어봐야 해서).
+- 제출용 zip 생성 시 `zip` 명령이 없어 Python `zipfile`로 만듦. `results/*/erase_cnt.txt`는 총 222MB라 제외(집계값은 `summary.txt`에 있음), `CLAUDE.md`·`gc_diag.log`·`local-verify-0-verify.state`도 제외.
+
+### 남은 일
+1. **push 안 된 커밋 2개** 있음(사용자가 직접 push하기로 함).
+2. `report/REPORT.docx`는 아직 git 추적 밖 — Word에서 직접 수정할 경우 그 파일이 최종본이 되므로 커밋 포함 여부 결정 필요.
+3. 저장소에 남아있는 실험 부산물 `gc_diag.log`, `local-verify-0-verify.state` 삭제 여부 결정 필요.
+4. 제출 (hslee@davinci.snu.ac.kr).
