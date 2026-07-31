@@ -175,42 +175,50 @@ save(fig, "fig3_hotcold_latency")
 
 # =====================================================================
 # Fig 4: uniform 비교 (raw, 정규화 불필요 — 항상 동일 바이트 기록)
-# 출처: results/20260730_131136(greedy)/131508(random)/131817(costbenefit)_*_final,
-#       results/*_uniformrep2, results/*_uniformrep3
+# 출처: results/*_final31_rep{1,2,3} (2026-07-31, migration 카운터/진단 포함된 최종 빌드)
 # =====================================================================
 uni_sum_raw = {
     "greedy": [271620, 271620, 271620],
     "costbenefit": [271620, 271620, 271620],
-    "random": [273384, 273400, 273332],
+    "random": [273380, 273380, 273380],
 }
 uni_max_raw = {
     "greedy": [161, 161, 161],
     "costbenefit": [161, 161, 161],
-    "random": [9, 10, 11],
+    "random": [10, 10, 9],
+}
+uni_migrate_raw = {
+    "greedy": [0, 0, 0],
+    "costbenefit": [0, 0, 0],
+    "random": [170670, 171086, 171211],
 }
 uni_sum, uni_sum_err = stats(uni_sum_raw)
 uni_max, uni_max_err = stats(uni_max_raw)
+uni_migrate, uni_migrate_err = stats(uni_migrate_raw)
 
-fig, axes = plt.subplots(1, 2, figsize=(10, 4.2))
-bar_panel(axes[0], uni_sum, uni_sum_err, "총 erase 횟수 (raw, 정규화 불필요)", "erase sum (회)", "{:.0f}")
-bar_panel(axes[1], uni_max, uni_max_err, "블록 하나의 최대 erase 횟수", "erase max (회)", "{:.1f}")
-fig.suptitle("uniform 워크로드 — Greedy=Cost-Benefit 구조적 수렴, Random 트레이드오프 (3회 반복)",
+fig, axes = plt.subplots(1, 3, figsize=(14, 4.2))
+bar_panel(axes[0], uni_migrate, uni_migrate_err, "GC 중 옮긴 valid page 총합", "migrate pages (개)", "{:.0f}")
+bar_panel(axes[1], uni_sum, uni_sum_err, "총 erase 횟수 (raw, 정규화 불필요)", "erase sum (회)", "{:.0f}")
+bar_panel(axes[2], uni_max, uni_max_err, "블록 하나의 최대 erase 횟수", "erase max (회)", "{:.1f}")
+fig.suptitle("uniform 워크로드 — Greedy=Cost-Benefit 구조적 수렴(migrate=0), Random 트레이드오프 (3회 반복)",
              fontsize=13, color=INK_PRIMARY, y=1.03)
 save(fig, "fig4_uniform_comparison")
 
 # =====================================================================
 # Fig 5: filebench 비교 (1회 측정, 보조 데이터)
-# 출처: results/20260730_181543(greedy)/182227(random)/182435(costbenefit)_fbcalib2_filebench
+# 출처: results/*_final31_filebench (2026-07-31, migration 카운터/진단 포함된 최종 빌드)
 # =====================================================================
-fb_erase_gib = {"greedy": 1361.7, "costbenefit": 1400.1, "random": 1453.6}
-fb_max = {"greedy": 3.0, "costbenefit": 3.0, "random": 7.0}
-fb_nonzero = {"greedy": 56216.0, "costbenefit": 56960.0, "random": 81388.0}
+fb_migrate_gib = {"greedy": 0.0, "costbenefit": 0.0, "random": 8590.8}
+fb_erase_gib = {"greedy": 1355.3, "costbenefit": 1379.7, "random": 1463.8}
+fb_max = {"greedy": 3.0, "costbenefit": 3.0, "random": 8.0}
+fb_nonzero = {"greedy": 57212.0, "costbenefit": 55472.0, "random": 82588.0}
 
-fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.2))
-bar_panel(axes[0], fb_erase_gib, None, "erase 효율 (GiB당)", "erases / GiB", "{:.0f}")
-bar_panel(axes[1], fb_max, None, "블록 최대 erase 횟수", "erase max (회)", "{:.0f}")
-bar_panel(axes[2], fb_nonzero, None, "erase된 블록 수", "nonzero blocks (개)", "{:.0f}")
-fig.suptitle("Filebench — fio 결과 재확인용 보조 벤치마크 (1회 측정, 2GB/120초/4스레드)",
+fig, axes = plt.subplots(1, 4, figsize=(17.5, 4.2))
+bar_panel(axes[0], fb_migrate_gib, None, "migration 비용 (GiB당)", "migrate pages / GiB", "{:.0f}")
+bar_panel(axes[1], fb_erase_gib, None, "erase 효율 (GiB당)", "erases / GiB", "{:.0f}")
+bar_panel(axes[2], fb_max, None, "블록 최대 erase 횟수", "erase max (회)", "{:.0f}")
+bar_panel(axes[3], fb_nonzero, None, "erase된 블록 수", "nonzero blocks (개)", "{:.0f}")
+fig.suptitle("Filebench — fio 결과 재확인용 보조 벤치마크 (1회 측정, 최종 빌드, 2GB/120초/4스레드)",
              fontsize=13, color=INK_PRIMARY, y=1.03)
 save(fig, "fig5_filebench_comparison")
 

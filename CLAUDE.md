@@ -380,8 +380,8 @@ awk 'NF==7 && $7!=0{sum+=$7; n++; if($7>max) max=$7} END {print "nonzero_blocks=
 - **지표 개선 `erase_cv_all` 신설**: 기존 `erase_cv`는 erase≥1인 블록만 대상이라 정책마다 모집단이 달라(85,624 vs 89,433) 엄밀하지 않았음. 전체 131,072 블록 기준으로 바꾸니 **Greedy 0.7861±0.0017 / CB 0.7375±0.0045 / Random 0.9369±0.0031로 범위가 안 겹침** → 웨어 레벨링 주장이 훨씬 명확해짐. 두 스크립트에 출력 추가(앞으로의 run엔 자동 포함). uniform은 8.26으로 hotcold의 10배 이상(워킹셋이 작아 마모가 극단적으로 몰림).
 - **산출물**: `report/REPORT.md`(초안 완성 — 목표/구현/방법론(버그 발견 스토리+3가지 검증)/결과/결론), `report/figures/fig1~8_*.png`(200dpi, 한글 폰트 적용), `report/make_figures.py`(raw 반복값에서 mean/stdev 직접 계산).
 
-### 다음 세션에서 할 일 (7/31 마감)
-1. **hotcold는 재실행하지 말 것** — `vpcdiag` 3회분이 이미 최종 빌드 + 교차검증 + 재현성 확인까지 끝난 데이터. 재실행하면 그래프/표만 다시 맞춰야 하고 얻는 게 없음.
-2. **uniform과 filebench만 최종 빌드로 재실행** — 현재 리포트가 서로 다른 빌드 데이터를 섞어 쓰고 있음(hotcold는 최종 빌드, uniform 3회분과 filebench는 migration 카운터·진단 없던 구버전). 이 둘만 다시 돌리면 리포트 전체가 한 버전으로 통일되고 두 워크로드에도 migration/divergence 데이터가 생김. 라벨은 `final31_repN`처럼 미리 정해둘 것(`results/`에 라벨이 20개 넘게 섞여 있음). uniform 9회 약 25분, filebench 9회 약 30분. 시간 빠듯하면 filebench는 정책당 1회만 최종 빌드로 다시 받고 "보조"로 남겨도 논지엔 지장 없음.
-3. 새 수치로 `report/make_figures.py`의 raw 배열 갱신 → 그래프 재생성 → `REPORT.md` 표/본문 갱신.
-4. 제출 (hslee@davinci.snu.ac.kr) — 제출물: 코드 + `report/REPORT.md` + `report/figures/*.png`.
+### 다음 세션에서 할 일 (7/31 마감) — 1~3 완료, 남은 건 제출뿐
+1. ~~hotcold는 재실행하지 말 것~~ → 재실행 안 함, 기존 `vpcdiag` 데이터 그대로 사용.
+2. ~~uniform과 filebench만 최종 빌드로 재실행~~ → **완료**: uniform `final31_rep1/2/3`(정책 3종×3회, 9회) + filebench `final31`(정책 3종×1회) 전부 최종 빌드로 재실행함. uniform 결과: Greedy=CB가 migration/erase 전부 3회 동일 수렴(migrate=0, sum=271620, max=161) 재확인, Random만 다름(migrate≈170,989, sum=273,380, max≈9.7). filebench 결과: GiB당 정규화 시 Greedy 1355.3/CB 1379.7/Random 1463.8 erases/GiB, migration은 Greedy·CB 둘 다 0이고 Random만 8590.8 — uniform과 동일한 "스큐 없으면 구조적 수렴" 패턴이 fio 외 도구에서도 재현됨.
+3. ~~새 수치로 `report/make_figures.py`의 raw 배열 갱신 → 그래프 재생성 → `REPORT.md` 표/본문 갱신~~ → **완료**. `make_figures.py`의 uniform(fig4, migration 패널 추가로 3패널화)·filebench(fig5, migration 패널 추가로 4패널화) 데이터 교체 후 전체 그래프 재생성, `REPORT.md` 4.2/4.3절 표·본문 갱신 — 이제 리포트 전체가 단일(최종) 빌드 데이터로 통일됨.
+4. **남은 건 제출뿐** (hslee@davinci.snu.ac.kr) — 제출물: 코드 + `report/REPORT.md` + `report/figures/*.png`. 제출 전 `report/REPORT.md` 전체를 한 번 통독해서 문장 매끄러움만 확인할 것.

@@ -1,0 +1,13 @@
+timestamp=20260731_112358
+policy=2
+policy_name=costbenefit
+label=final31
+tool=filebench
+fb_filesize=2g
+fb_runtime=120
+fb_nthreads=4
+disk_condition=fresh_module_reload_and_mkfs
+nvme_dev=/dev/nvme1n1
+memmap_start=16G
+memmap_size=48G
+cpus=7,8

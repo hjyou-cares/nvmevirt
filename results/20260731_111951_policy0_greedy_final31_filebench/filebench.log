@@ -1,0 +1,19 @@
+WARNING: Could not open /proc/sys/kernel/shmmax file!
+It means that you probably ran Filebench not as a root. Filebench will not increase shared
+region limits in this case, which can lead to the failures on certain workloads.
+Filebench Version 1.5-alpha3
+0.000: Allocated 177MB of shared memory
+0.000: Populating and pre-allocating filesets
+0.000: Removing gcfile tree (if exists)
+0.001: Pre-allocating directories in gcfile tree
+0.001: Pre-allocating files in gcfile tree
+0.252: Waiting for pre-allocation to finish (in case of a parallel pre-allocation)
+0.252: Population and pre-allocation of filesets completed
+0.252: Starting 1 filewriter instances
+1.254: Running...
+121.266: Run took 120 seconds...
+121.266: Per-Operation Breakdown
+sync-file            22895525ops   190778ops/s   0.0mb/s    0.012ms/op [0.005ms - 918.652ms]
+write-file           22895532ops   190778ops/s 745.2mb/s    0.008ms/op [0.001ms - 0.404ms]
+121.266: IO Summary: 45791057 ops 381555.245 ops/s 0/190778 rd/wr 745.2mb/s 0.010ms/op
+121.266: Shutting down processes
