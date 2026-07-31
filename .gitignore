@@ -181,3 +181,7 @@ Module.symvers
 modules.order
 *.cmd
 .tmp_versions/
+
+# 실험 중 생기는 부산물 (진단 printk 덤프, fio verify 상태 파일)
+gc_diag.log
+*-verify.state
