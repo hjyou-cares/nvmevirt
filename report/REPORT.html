@@ -216,6 +216,7 @@ widows: 2;
 </head>
 <body>
 <h1 id="실습-1-nvmevirt-cost-benefit-gc-구현-및-성능-분석">실습 1: NVMeVirt Cost-Benefit GC 구현 및 성능 분석</h1>
+<p><strong>유형진 (인턴)</strong> · 2026년 7월 31일</p>
 <h2 id="실습-목표">1. 실습 목표</h2>
 <p>NVMeVirt(가상 NVMe SSD 커널 모듈)의 Conventional FTL에서 GC victim 선택 정책 세 가지를 구현하고 비교한다.</p>
 <p>FTL은 로그 구조로 동작하므로 덮어쓰기가 발생하면 기존 페이지는 무효(invalid)가 되고 새 페이지가 다른 위치에 쓰인다. 무효 페이지가 쌓이면 GC가 line 하나를 골라 남아있는 valid page를 다른 곳으로 옮긴 뒤 블록을 지워 공간을 회수한다. 이때 <strong>어떤 line을 고르는가</strong>가 GC 정책이다.</p>

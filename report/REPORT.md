@@ -1,5 +1,7 @@
 # 실습 1: NVMeVirt Cost-Benefit GC 구현 및 성능 분석
 
+**유형진 (인턴)** · 2026년 7월 31일
+
 ## 1. 실습 목표
 
 NVMeVirt(가상 NVMe SSD 커널 모듈)의 Conventional FTL에서 GC victim 선택 정책 세 가지를 구현하고 비교한다.
