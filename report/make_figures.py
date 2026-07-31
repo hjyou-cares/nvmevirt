@@ -9,6 +9,8 @@
 서버와 로컬 양쪽에서 렌더링하기 때문. 덕분에 CJK 폰트 의존성이 아예 없어서
 matplotlib 기본 폰트(DejaVu Sans)로 어디서든 동일하게 렌더링된다.
 """
+import glob
+import json
 import os
 import matplotlib
 matplotlib.use("Agg")
@@ -319,6 +321,85 @@ fig.suptitle("uniform — Greedy and Cost-Benefit converge structurally (migrate
              "Random trades off (3 runs)",
              fontsize=13, color=INK_PRIMARY, y=1.03)
 save(fig, "fig5_uniform_comparison")
+
+# =====================================================================
+# Fig 6: uniform 사용률 스윕 — 디바이스를 채우면 두 정책이 갈리기 시작하는가
+# 같은 uniform 워크로드를 파일 크기만 바꿔가며 측정 (총 쓰기량은 146~154GiB로 맞춤).
+# results/에서 직접 읽으므로 새 지점을 돌리면 아래 목록에만 추가하면 됨.
+# =====================================================================
+DEVICE_GIB = 44.86    # lsblk 기준 노출 용량
+PHYSICAL_GIB = 48.0   # memmap_size=48G
+
+SWEEP_POINTS = [
+    ("final31_rep", 0.5859),   # 600 MiB
+    ("util50", 22.0),          # 22 GiB
+    ("util80", 38.0),          # 38 GiB
+]
+
+
+def collect_sweep(tag):
+    """results/*<tag>* 에서 정책별 (migrate/GiB, divergence%) 평균을 모은다."""
+    out = {}
+    for d in sorted(glob.glob(os.path.join(REPO_ROOT, "results", f"*{tag}*"))):
+        if "filebench" in d:
+            continue
+        meta = dict(l.strip().split("=", 1) for l in open(os.path.join(d, "meta.txt")) if "=" in l)
+        s = dict(kv.split("=", 1) for kv in open(os.path.join(d, "summary.txt")).read().split())
+        gib = json.load(open(os.path.join(d, "fio.json")))["jobs"][0]["write"]["io_bytes"] / 2 ** 30
+        total_gc = int(s["total_gc"])
+        out.setdefault(meta["policy_name"], []).append((
+            int(s["gc_migrate_pages"]) / gib,
+            (int(s["greedy_vs_cb_identity_diverge"]) / total_gc * 100) if total_gc else 0.0,
+        ))
+    return {k: (float(np.mean([x[0] for x in v])), float(np.mean([x[1] for x in v])))
+            for k, v in out.items()}
+
+sweep = [(live, collect_sweep(tag)) for tag, live in SWEEP_POINTS]
+sweep = [(live, d) for live, d in sweep if d]
+missing = [tag for tag, live in SWEEP_POINTS if not collect_sweep(tag)]
+if missing:
+    print(f"  (fig6: 아직 데이터 없는 지점 건너뜀 -> {missing})")
+
+xs = np.arange(len(sweep))
+xlabels = [f"{live * 1024:.0f} MiB\n({live / DEVICE_GIB * 100:.1f}% full)" if live < 1
+           else f"{live:.0f} GiB\n({live / DEVICE_GIB * 100:.0f}% full)"
+           for live, _ in sweep]
+
+fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.5))
+w = 0.24
+for pi, pol in enumerate(ORDER):
+    vals = [d.get(pol, (0.0, 0.0))[0] for _, d in sweep]
+    axes[0].bar(xs + (pi - 1) * w, vals, width=w, color=COLOR[pol], label=LABEL[pol],
+                zorder=3, edgecolor=SURFACE, linewidth=2.0)
+    for xi, v in zip(xs + (pi - 1) * w, vals):
+        axes[0].annotate(f"{v:.0f}", xy=(xi, v), xytext=(0, 4), textcoords="offset points",
+                         ha="center", fontsize=8.5, color=INK_SECONDARY)
+axes[0].set_ylabel("valid pages migrated / GiB written")
+axes[0].set_title("GC migration cost as the device fills up", loc="left", fontsize=11.5, pad=10)
+axes[0].legend(loc="lower right", bbox_to_anchor=(1.0, 1.005), frameon=False, ncol=3,
+               fontsize=9, labelcolor=INK_SECONDARY, handlelength=1.1, handleheight=1.1,
+               columnspacing=1.4)
+
+div = [d.get("greedy", (0.0, 0.0))[1] for _, d in sweep]
+bars = axes[1].bar(xs, div, width=0.45, color=COLOR["costbenefit"], zorder=3)
+for r, v in zip(bars, div):
+    axes[1].annotate(f"{v:.1f}%", xy=(r.get_x() + r.get_width() / 2, v), xytext=(0, 4),
+                     textcoords="offset points", ha="center", fontsize=9.5, color=INK_SECONDARY)
+axes[1].set_ylabel("GC decisions where Greedy and CB differ (%)")
+axes[1].set_title("Do the two policies ever disagree?", loc="left", fontsize=11.5, pad=10)
+axes[1].set_ylim(0, max(max(div) * 1.35, 5))
+
+for ax in axes:
+    ax.set_xticks(xs)
+    ax.set_xticklabels(xlabels, fontsize=9.5)
+    ax.tick_params(axis="both", length=0)
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.grid(axis="x", visible=False)
+    ax.margins(y=0.18)
+
+fig.suptitle("uniform utilization sweep — filling the device does not make the policies diverge",
+             fontsize=13, color=INK_PRIMARY, y=1.03)
+save(fig, "fig6_utilization_sweep")
 
 # =====================================================================
 # Fig 8: filebench 비교 (1회 측정, 보조 데이터)
