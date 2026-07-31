@@ -1,0 +1,18 @@
+timestamp=20260731_143939
+policy=0
+policy_name=greedy
+label=zipf_rep3
+workload=uniform
+uniform_size=22G
+uniform_loops=7
+random_dist=zipf:1.2
+cold_size=30G
+cold_touch_size=15G
+hot_size=1G
+hotcold_runtime=90
+disk_condition=fresh_module_reload_and_mkfs
+nvme_dev=/dev/nvme1n1
+memmap_start=16G
+memmap_size=48G
+cpus=7,8
+fio_cmd=fio --name=gc_stress --filename=$MOUNT_DIR/testfile2 --size=22G --rw=randwrite --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=7 --random_distribution=zipf:1.2 --group_reporting
