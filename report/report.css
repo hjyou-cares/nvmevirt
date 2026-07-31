@@ -1,0 +1,254 @@
+/*
+ * REPORT.md -> HTML -> (브라우저 인쇄) -> PDF 변환용 스타일시트.
+ *
+ * 화면에서 읽기 좋으면서 A4로 인쇄해도 깨지지 않는 것이 목표라, 화면용 규칙을
+ * 먼저 쓰고 @media print에서 인쇄 전용 규칙만 덮어쓴다.
+ *
+ * 폰트는 시스템에 설치된 것만 쓴다(웹폰트 없음). 이 HTML은 최종적으로 Windows
+ * 브라우저에서 열어 인쇄하므로 맑은 고딕을 1순위로 두고, macOS/리눅스에서 열릴
+ * 경우를 대비해 대체 폰트를 뒤에 나열했다.
+ */
+
+:root {
+  --text: #1a1a1a;
+  --muted: #5c5c5c;
+  --rule: #d4d4d4;
+  --accent: #1f4e79;
+  --code-bg: #f5f5f5;
+  --th-bg: #eef2f6;
+  --zebra: #fafbfc;
+}
+
+html {
+  font-size: 16px;
+}
+
+body {
+  font-family: "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo",
+               "Noto Sans KR", "Nanum Gothic", sans-serif;
+  color: var(--text);
+  line-height: 1.75;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 5rem;
+  word-break: keep-all;      /* 한글이 단어 중간에서 끊기지 않도록 */
+  overflow-wrap: break-word; /* 단, 긴 경로/URL은 넘치지 말고 줄바꿈 */
+}
+
+/* ---------- 제목 ---------- */
+
+h1, h2, h3, h4 {
+  line-height: 1.35;
+  font-weight: 700;
+  /* 제목만 페이지 끝에 홀로 남는 것을 방지 */
+  page-break-after: avoid;
+  break-after: avoid;
+}
+
+h1 {
+  font-size: 1.9rem;
+  color: var(--accent);
+  border-bottom: 3px solid var(--accent);
+  padding-bottom: 0.6rem;
+  margin: 0 0 2.5rem;
+}
+
+h2 {
+  font-size: 1.4rem;
+  color: var(--accent);
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 0.35rem;
+  margin: 3rem 0 1.2rem;
+}
+
+h3 {
+  font-size: 1.13rem;
+  margin: 2.2rem 0 0.8rem;
+}
+
+h4 {
+  font-size: 1rem;
+  color: var(--muted);
+  margin: 1.6rem 0 0.6rem;
+}
+
+p {
+  margin: 0 0 1.05rem;
+}
+
+/* ---------- 표 ---------- */
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1.5rem 0 1.8rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+/*
+ * 인쇄 시 표가 페이지를 넘어가면 다음 페이지에도 머리행을 자동으로 반복한다.
+ * (워드 변환 경로에서는 pandoc이 <w:tblHeader/>를 넣지 않아 finalize_docx.py로
+ * 후처리해야 했던 문제가, HTML 경로에서는 이 한 줄로 해결된다.)
+ */
+thead {
+  display: table-header-group;
+}
+
+th, td {
+  border: 1px solid var(--rule);
+  padding: 0.45rem 0.7rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: var(--th-bg);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+tbody tr:nth-child(even) {
+  background: var(--zebra);
+}
+
+/* 표의 각 행은 페이지 경계에서 쪼개지지 않게 */
+tr {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+/* ---------- 그림 ---------- */
+
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+figure {
+  margin: 1.8rem 0;
+  /* 그림과 캡션이 서로 다른 페이지로 갈라지지 않게 */
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+figcaption {
+  font-size: 0.85rem;
+  color: var(--muted);
+  line-height: 1.6;
+  text-align: left;
+  margin-top: 0.7rem;
+  padding-left: 0.2rem;
+  border-left: 3px solid var(--rule);
+  padding-left: 0.8rem;
+}
+
+/* pandoc 2.9는 이미지만 있는 문단을 <figure>로 감싸지 않고 <p><img></p>로 내보내는
+   경우가 있어, 그때도 페이지 중간에서 잘리지 않도록 같은 규칙을 적용한다. */
+p > img:only-child {
+  page-break-inside: avoid;
+  break-inside: avoid;
+  margin: 1.8rem auto;
+}
+
+/* ---------- 코드 ---------- */
+
+code {
+  font-family: "Cascadia Mono", "Consolas", "D2Coding", "DejaVu Sans Mono", monospace;
+  font-size: 0.86em;
+  background: var(--code-bg);
+  padding: 0.12em 0.35em;
+  border-radius: 3px;
+}
+
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.9rem 1.1rem;
+  overflow-x: auto;
+  line-height: 1.5;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.82rem;
+  white-space: pre;
+}
+
+/* ---------- 목록 / 인용 ---------- */
+
+ul, ol {
+  margin: 0 0 1.05rem;
+  padding-left: 1.6rem;
+}
+
+li {
+  margin-bottom: 0.35rem;
+}
+
+blockquote {
+  margin: 1.3rem 0;
+  padding: 0.2rem 0 0.2rem 1.1rem;
+  border-left: 4px solid var(--accent);
+  color: var(--muted);
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--rule);
+  margin: 2.5rem 0;
+}
+
+strong {
+  font-weight: 700;
+}
+
+a {
+  color: var(--accent);
+}
+
+/* ---------- 인쇄 ---------- */
+
+@media print {
+  @page {
+    size: A4;
+    margin: 18mm 16mm 20mm;
+  }
+
+  html {
+    font-size: 10.5pt; /* A4 한 줄에 적당한 글자 수가 들어오도록 축소 */
+  }
+
+  body {
+    max-width: none;
+    padding: 0;
+  }
+
+  /* 표 머리행 배경과 얼룩무늬가 인쇄에서도 남도록 (기본값은 배경 생략) */
+  th, tbody tr:nth-child(even), pre, code {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* 링크는 화면에서만 색이 의미 있으므로 인쇄에서는 본문색으로 */
+  a {
+    color: var(--text);
+    text-decoration: none;
+  }
+
+  h2 {
+    margin-top: 2rem;
+  }
+
+  /* 문단이 한 줄만 남고 페이지가 넘어가는 것을 방지 */
+  p, li {
+    orphans: 2;
+    widows: 2;
+  }
+}
