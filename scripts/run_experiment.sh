@@ -68,6 +68,18 @@ RANDOM_DIST="${RANDOM_DIST:-}"
 DIST_OPT=""
 [ -n "$RANDOM_DIST" ] && DIST_OPT="--random_distribution=$RANDOM_DIST"
 
+# NORANDOMMAP=1 로 fio의 --norandommap을 켠다. 기본값(끔)에서 fio는 비트맵을 유지해
+# 한 loop 안에서 각 블록을 정확히 한 번씩만 방문하므로, 균등 분포라 해도 실제로는
+# i.i.d. 랜덤 쓰기가 아니라 "매 pass마다 전체를 한 번씩 훑는 무작위 순열"이 된다.
+# 이러면 모든 페이지가 pass당 정확히 한 번 무효화되어 오래된 line은 반드시 100%
+# 무효화되고, Greedy가 항상 vpc=0인 line을 찾아내 GC 비용이 0이 된다(사용률 85%
+# 조건에서도 gc_migrate_pages=0이 나온 것에 대한 유력한 설명).
+# 이 변수를 켜면 블록이 중복/누락 방문되는 진짜 i.i.d. 랜덤 쓰기가 되어 valid page가
+# 남은 채로 회수되는 line이 생기는지 확인할 수 있다. 총 쓰기량은 그대로 유지된다.
+NORANDOMMAP="${NORANDOMMAP:-}"
+NORANDOMMAP_OPT=""
+[ -n "$NORANDOMMAP" ] && NORANDOMMAP_OPT="--norandommap=1"
+
 case "$POLICY" in
   0) POLICY_NAME=greedy ;;
   1) POLICY_NAME=random ;;
@@ -111,10 +123,10 @@ if [ "$WORKLOAD" = "uniform" ]; then
   # 로컬 VM보다 훨씬 커서(로컬 32KB vs 서버 ~360KB), 로컬 VM 기준으로 잡았던
   # loops=10(총 6GB)로는 용량의 13%밖에 못 채워 GC가 전혀 안 돌았음(2026-07-29 확인).
   # loops=250이면 총 146GB(용량의 약 3.3배)를 써서 GC가 확실히 여러 번 트리거됨.
-  FIO_CMD="fio --name=gc_stress --filename=\$MOUNT_DIR/testfile2 --size=$UNIFORM_SIZE --rw=randwrite --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=$UNIFORM_LOOPS $DIST_OPT --group_reporting"
+  FIO_CMD="fio --name=gc_stress --filename=\$MOUNT_DIR/testfile2 --size=$UNIFORM_SIZE --rw=randwrite --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=$UNIFORM_LOOPS $DIST_OPT $NORANDOMMAP_OPT --group_reporting"
   fio --name=gc_stress --filename="$MOUNT_DIR/testfile2" --size="$UNIFORM_SIZE" --rw=randwrite \
       --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops="$UNIFORM_LOOPS" \
-      $DIST_OPT \
+      $DIST_OPT $NORANDOMMAP_OPT \
       --group_reporting --output-format=json --output="$OUTDIR/fio.json"
 else
   FIO_CMD="COLD_SIZE=$COLD_SIZE COLD_TOUCH_SIZE=$COLD_TOUCH_SIZE HOT_SIZE=$HOT_SIZE HOTCOLD_RUNTIME=$HOTCOLD_RUNTIME fio $REPO_ROOT/scripts/workloads/hotcold.fio --directory=\$MOUNT_DIR"
@@ -172,6 +184,7 @@ awk '
   echo "uniform_size=$UNIFORM_SIZE"
   echo "uniform_loops=$UNIFORM_LOOPS"
   echo "random_dist=${RANDOM_DIST:-uniform}"
+  echo "norandommap=${NORANDOMMAP:-0}"
   echo "cold_size=$COLD_SIZE"
   echo "cold_touch_size=$COLD_TOUCH_SIZE"
   echo "hot_size=$HOT_SIZE"
