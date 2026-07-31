@@ -365,40 +365,40 @@ xlabels = [f"{live * 1024:.0f} MiB\n({live / DEVICE_GIB * 100:.1f}% full)" if li
            else f"{live:.0f} GiB\n({live / DEVICE_GIB * 100:.0f}% full)"
            for live, _ in sweep]
 
-fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.5))
+# 단일 패널로 그린다. "Greedy와 CB가 갈린 비율"은 세 지점 모두 정확히 0%라
+# 막대로 그리면 빈 축만 남으므로, 축 대신 캡션 한 줄로 적는다.
+fig, ax = plt.subplots(figsize=(9.5, 4.8))
 w = 0.24
 for pi, pol in enumerate(ORDER):
     vals = [d.get(pol, (0.0, 0.0))[0] for _, d in sweep]
-    axes[0].bar(xs + (pi - 1) * w, vals, width=w, color=COLOR[pol], label=LABEL[pol],
-                zorder=3, edgecolor=SURFACE, linewidth=2.0)
+    ax.bar(xs + (pi - 1) * w, vals, width=w, color=COLOR[pol], label=LABEL[pol],
+           zorder=3, edgecolor=SURFACE, linewidth=2.0)
     for xi, v in zip(xs + (pi - 1) * w, vals):
-        axes[0].annotate(f"{v:.0f}", xy=(xi, v), xytext=(0, 4), textcoords="offset points",
-                         ha="center", fontsize=8.5, color=INK_SECONDARY)
-axes[0].set_ylabel("valid pages migrated / GiB written")
-axes[0].set_title("GC migration cost as the device fills up", loc="left", fontsize=11.5, pad=10)
-axes[0].legend(loc="lower right", bbox_to_anchor=(1.0, 1.005), frameon=False, ncol=3,
-               fontsize=9, labelcolor=INK_SECONDARY, handlelength=1.1, handleheight=1.1,
-               columnspacing=1.4)
+        ax.annotate(f"{v:,.0f}", xy=(xi, v), xytext=(0, 4), textcoords="offset points",
+                    ha="center", fontsize=9, color=INK_SECONDARY)
 
-div = [d.get("greedy", (0.0, 0.0))[1] for _, d in sweep]
-bars = axes[1].bar(xs, div, width=0.45, color=COLOR["costbenefit"], zorder=3)
-for r, v in zip(bars, div):
-    axes[1].annotate(f"{v:.1f}%", xy=(r.get_x() + r.get_width() / 2, v), xytext=(0, 4),
-                     textcoords="offset points", ha="center", fontsize=9.5, color=INK_SECONDARY)
-axes[1].set_ylabel("GC decisions where Greedy and CB differ (%)")
-axes[1].set_title("Do the two policies ever disagree?", loc="left", fontsize=11.5, pad=10)
-axes[1].set_ylim(0, max(max(div) * 1.35, 5))
+ax.set_ylabel("valid pages migrated / GiB written")
+ax.set_xticks(xs)
+ax.set_xticklabels(xlabels, fontsize=10)
+ax.tick_params(axis="both", length=0)
+ax.spines[["top", "right", "left"]].set_visible(False)
+ax.grid(axis="x", visible=False)
+ax.margins(y=0.22)
+ax.legend(loc="upper left", frameon=False, fontsize=9.5, labelcolor=INK_SECONDARY,
+          handlelength=1.1, handleheight=1.1)
+ax.set_title("Greedy and Cost-Benefit migrate nothing at any utilization, "
+             "while Random's cost nearly triples",
+             loc="left", fontsize=11.5, pad=10, color=INK_PRIMARY)
 
-for ax in axes:
-    ax.set_xticks(xs)
-    ax.set_xticklabels(xlabels, fontsize=9.5)
-    ax.tick_params(axis="both", length=0)
-    ax.spines[["top", "right", "left"]].set_visible(False)
-    ax.grid(axis="x", visible=False)
-    ax.margins(y=0.18)
+div_note = ", ".join(f"{lbl.splitlines()[0]}: {d.get('greedy', (0.0, 0.0))[1]:.1f}%"
+                     for lbl, (_, d) in zip(xlabels, sweep))
+fig.text(0.5, -0.055,
+         "Share of GC decisions where Greedy and Cost-Benefit picked a different line  -  "
+         + div_note,
+         ha="center", fontsize=9.5, color=INK_MUTED)
 
-fig.suptitle("uniform utilization sweep — filling the device does not make the policies diverge",
-             fontsize=13, color=INK_PRIMARY, y=1.03)
+fig.suptitle("uniform utilization sweep - filling the device does not make the policies diverge",
+             fontsize=13, color=INK_PRIMARY, y=1.02)
 save(fig, "fig6_utilization_sweep")
 
 # =====================================================================
