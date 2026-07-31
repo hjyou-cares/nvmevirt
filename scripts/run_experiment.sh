@@ -56,6 +56,18 @@ export COLD_SIZE COLD_TOUCH_SIZE HOT_SIZE HOTCOLD_RUNTIME
 UNIFORM_SIZE="${UNIFORM_SIZE:-600M}"
 UNIFORM_LOOPS="${UNIFORM_LOOPS:-250}"
 
+# RANDOM_DIST: fio의 --random_distribution 값 (예: zipf:1.2, pareto:0.3, zoned:...).
+# 비워두면 fio 기본값인 균등 분포를 쓴다.
+#
+# 사용률 스윕(4.2.1절)에서 확인했듯이 균등 분포에서는 디바이스를 85%까지 채워도
+# 완전히 무효화된 line이 항상 남아 있어서 Greedy와 Cost-Benefit의 선택이 전혀
+# 갈리지 않는다. 이 변수만 zipf로 바꾸면 파일 크기와 총 쓰기량을 그대로 둔 채
+# 접근 분포만 바꿀 수 있어서, "정책 차이를 만드는 건 용량이 아니라 스큐"라는
+# 주장을 대조 실험으로 검증할 수 있다.
+RANDOM_DIST="${RANDOM_DIST:-}"
+DIST_OPT=""
+[ -n "$RANDOM_DIST" ] && DIST_OPT="--random_distribution=$RANDOM_DIST"
+
 case "$POLICY" in
   0) POLICY_NAME=greedy ;;
   1) POLICY_NAME=random ;;
@@ -99,9 +111,10 @@ if [ "$WORKLOAD" = "uniform" ]; then
   # 로컬 VM보다 훨씬 커서(로컬 32KB vs 서버 ~360KB), 로컬 VM 기준으로 잡았던
   # loops=10(총 6GB)로는 용량의 13%밖에 못 채워 GC가 전혀 안 돌았음(2026-07-29 확인).
   # loops=250이면 총 146GB(용량의 약 3.3배)를 써서 GC가 확실히 여러 번 트리거됨.
-  FIO_CMD="fio --name=gc_stress --filename=\$MOUNT_DIR/testfile2 --size=$UNIFORM_SIZE --rw=randwrite --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=$UNIFORM_LOOPS --group_reporting"
+  FIO_CMD="fio --name=gc_stress --filename=\$MOUNT_DIR/testfile2 --size=$UNIFORM_SIZE --rw=randwrite --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=$UNIFORM_LOOPS $DIST_OPT --group_reporting"
   fio --name=gc_stress --filename="$MOUNT_DIR/testfile2" --size="$UNIFORM_SIZE" --rw=randwrite \
       --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops="$UNIFORM_LOOPS" \
+      $DIST_OPT \
       --group_reporting --output-format=json --output="$OUTDIR/fio.json"
 else
   FIO_CMD="COLD_SIZE=$COLD_SIZE COLD_TOUCH_SIZE=$COLD_TOUCH_SIZE HOT_SIZE=$HOT_SIZE HOTCOLD_RUNTIME=$HOTCOLD_RUNTIME fio $REPO_ROOT/scripts/workloads/hotcold.fio --directory=\$MOUNT_DIR"
@@ -158,6 +171,7 @@ awk '
   echo "workload=$WORKLOAD"
   echo "uniform_size=$UNIFORM_SIZE"
   echo "uniform_loops=$UNIFORM_LOOPS"
+  echo "random_dist=${RANDOM_DIST:-uniform}"
   echo "cold_size=$COLD_SIZE"
   echo "cold_touch_size=$COLD_TOUCH_SIZE"
   echo "hot_size=$HOT_SIZE"
