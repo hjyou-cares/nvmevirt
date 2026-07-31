@@ -1,0 +1,1 @@
+nonzero_blocks=123212 sum=303484 max=6 gc_migrate_pages=928559 total_gc=75871 greedy_vs_cb_identity_diverge=74927 avg_greedy_vpc=6.020 avg_cb_vpc=12.239 avg_abs_vpc_diff=6.219 same_vpc_different_line_ratio=0.0011 erase_cv=0.4479 erase_cv_all=0.5265
