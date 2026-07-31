@@ -73,13 +73,27 @@ Greedy는 항상 최소 vpc line을, Cost-Benefit은 항상 그 순간의 CB 최
 
 ## 4. 결과
 
+### 4.0 전체 조망 — 워크로드별 블록 마모 분포
+
+세부 지표로 들어가기 전에, 세 워크로드에서 실제로 블록들이 얼마나 닳았는지를 한 장으로 본다. 집계값이 아니라 실험 종료 시점에 `/proc/nvmev/debug`가 덤프한 131,072개 블록의 erase 횟수를 그대로 그린 것이다.
+
+![그림 1 — 워크로드 × 정책별 블록 erase 횟수 분포와 erase된 블록 비율](figures/fig1_wear_distribution.png)
+
+세 가지가 한눈에 드러난다.
+
+- **uniform에서 Greedy와 Cost-Benefit은 분포까지 겹친다.** 두 정책 모두 전체 블록의 1.5%만 건드리면서 그 블록들을 최대 161회까지 반복해서 지웠다. 뒤에서 보겠지만 이건 우연이 아니라 구조적으로 동일한 동작이다(4.2절).
+- **hotcold에서만 두 정책이 갈린다.** Cost-Benefit은 최대 마모를 10회에서 9회로 낮추면서 마모를 더 넓은 블록(65.3% → 68.2%)에 퍼뜨렸다. 이 실습의 핵심 결과다(4.1절).
+- **Random은 모든 워크로드에서 마모를 가장 넓게 퍼뜨린다.** uniform에서 88.0%의 블록을 건드려 최대 마모를 161회에서 10회로 낮췄다. 다만 이건 공짜가 아니라 GC 비용을 크게 치른 결과이며, 그 대가는 4.1~4.3절의 migration/latency 지표에서 드러난다.
+
+워크로드마다 기록한 총 바이트가 다르므로(uniform 146.5 GiB, hotcold 102\~167 GiB, filebench 87\~90 GiB) 워크로드 사이의 절대 높이를 직접 비교하는 것은 의미가 없다. 이 그림이 보여주는 것은 **같은 워크로드 안에서 정책별로 마모가 어떤 모양으로 퍼지는가**이다.
+
 ### 4.1 hotcold — 정책 간 실질적 차이 (핵심 결과)
 
-![그림 1 — GiB당 migration 비용과 erase 횟수](figures/fig1_hotcold_efficiency.png)
+![그림 2 — GiB당 migration 비용과 erase 횟수](figures/fig2_hotcold_efficiency.png)
 
-![그림 2 — 최대 erase 횟수(peak wear)와 erase된 블록 수](figures/fig2_hotcold_wear_leveling.png)
+![그림 3 — 최대 erase 횟수(peak wear)와 erase된 블록 수](figures/fig3_hotcold_wear_leveling.png)
 
-![그림 3 — 호스트 IO 평균/p99 latency](figures/fig3_hotcold_latency.png)
+![그림 4 — 호스트 IO 평균/p99 latency](figures/fig4_hotcold_latency.png)
 
 | 지표 | Greedy | Cost-Benefit | Random |
 |---|---|---|---|
@@ -99,9 +113,9 @@ Greedy는 항상 최소 vpc line을, Cost-Benefit은 항상 그 순간의 CB 최
 
 ### 4.2 uniform — 핫/콜드 구분이 없으면 두 정책은 "증명 가능하게" 동일하다
 
-![그림 4 — migration 비용, erase 총합, 최댓값 (migration 비용은 GiB당이 아니라 raw 값이다 — uniform은 정책 무관하게 항상 정확히 같은 바이트 수를 기록하므로 정규화가 필요 없다)](figures/fig4_uniform_comparison.png)
+![그림 5 — migration 비용, erase 총합, 최댓값 (migration 비용은 GiB당이 아니라 raw 값이다 — uniform은 정책 무관하게 항상 정확히 같은 바이트 수를 기록하므로 정규화가 필요 없다)](figures/fig5_uniform_comparison.png)
 
-![그림 8 — uniform vs hotcold 대비](figures/fig8_workload_decides.png)
+![그림 7 — uniform vs hotcold 대비](figures/fig7_workload_decides.png)
 
 | 지표 | Greedy | Cost-Benefit | Random |
 |---|---|---|---|
@@ -128,7 +142,7 @@ Greedy는 항상 최소 vpc line을, Cost-Benefit은 항상 그 순간의 CB 최
 
 ### 4.3 filebench — fio 결과 재확인 (보조 벤치마크)
 
-![그림 5 — migration 비용, erase 효율(GiB당), erase 최댓값, erase된 블록 수](figures/fig5_filebench_comparison.png)
+![그림 8 — migration 비용, erase 효율(GiB당), erase 최댓값, erase된 블록 수](figures/fig8_filebench_comparison.png)
 
 fio와는 다른 벤치마크 도구인 filebench로, uniform과 마찬가지로 핫/콜드 스큐가 없는 워크로드(단일 파일에 4KB 랜덤쓰기 + 매 write마다 fsync, 정책당 120초, 최종 빌드 기준 1회 측정)를 실행해 fio 결론이 도구에 국한된 결과가 아닌지 재확인했다. 세 정책이 같은 120초 동안 실제로 쓴 데이터량이 서로 달라(87.34/88.76/88.52 GiB), 아래 수치는 hotcold와 동일하게 GiB당으로 정규화했다(단, migration/erase 최댓값·블록 수는 raw로도 의미 있어 함께 표기).
 
@@ -144,7 +158,7 @@ fio와는 다른 벤치마크 도구인 filebench로, uniform과 마찬가지로
 
 ### 4.4 victim divergence 분석 — "다른 line을 골라도 비용은 비슷한가?"
 
-![그림 6 — victim divergence 분석](figures/fig6_vpc_divergence.png)
+![그림 9 — victim divergence 분석](figures/fig9_vpc_divergence.png)
 
 Greedy와 Cost-Benefit은 hotcold 워크로드에서 GC 판정의 약 90%에서 서로 다른 line을 선택한다. 그런데 "다르게 고른 게 실제 비용(옮겨야 할 valid page 수, vpc) 차이로 이어지는가"를 확인하기 위해, 매 GC마다 두 정책이 각각 골랐을 line의 vpc를 큐 전체 스캔으로 비교하는 진단을 추가했다.
 
@@ -152,7 +166,7 @@ Greedy와 Cost-Benefit은 hotcold 워크로드에서 GC 판정의 약 90%에서 
 
 ### 4.5 버그 수정 전후 비교 (참고)
 
-![그림 7 — 힙 staleness 버그 수정 전후 비교](figures/fig7_bugfix_before_after.png)
+![그림 10 — 힙 staleness 버그 수정 전후 비교](figures/fig10_bugfix_before_after.png)
 
 힙 staleness 버그를 수정하기 전에는 Greedy와 Cost-Benefit의 migration 비용 차이가 각 정책 자체의 반복 측정 간 편차보다 작아 "노이즈 수준"으로만 보였다. 버그를 수정한 뒤에는 3회 반복 모두 range가 겹치지 않는 뚜렷한 차이로 나타났다 — 지금까지 관찰된 "Greedy≈Cost-Benefit 수렴"은 워크로드 설계 문제가 아니라 이 힙 staleness 버그가 Cost-Benefit을 우연히 Greedy와 비슷하게 행동하게 만든 결과였다.
 

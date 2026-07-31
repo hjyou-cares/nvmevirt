@@ -1,17 +1,23 @@
 """
 실습 1 보고서용 그래프 생성 스크립트.
 가능한 한 raw 반복측정값에서 직접 mean/stdev를 계산 (하드코딩된 통계치 최소화).
-데이터 출처: CLAUDE.md / EXPERIMENT_LOG.md 2026-07-30 항목, results/*_vpcdiag_rep*.
+데이터 출처: CLAUDE.md / EXPERIMENT_LOG.md 2026-07-30~31 항목, results/*.
 실행: python3 report/make_figures.py  (결과: report/figures/*.png)
+
+그래프 안의 텍스트는 전부 영어로 작성함 -- 본문은 한국어지만, 그림은 폰트가 설치
+안 된 환경(서버/로컬/뷰어)에서도 깨지지 않아야 하고 실제로 이 저장소를 오가며
+서버와 로컬 양쪽에서 렌더링하기 때문. 덕분에 CJK 폰트 의존성이 아예 없어서
+matplotlib 기본 폰트(DejaVu Sans)로 어디서든 동일하게 렌더링된다.
 """
+import os
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
+from matplotlib.patches import Patch
 import numpy as np
 
-fm.fontManager.addfont("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc")
-plt.rcParams["font.family"] = "Noto Sans CJK JP"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TOTAL_BLOCKS = 131072  # 8ch x 4partition topology, 고정값 (memmap 크기와 무관)
 
 # ---- 팔레트 (dataviz 스킬 reference/palette.md, light mode, 카테고리 슬롯 1~3) ----
 COLOR = {
@@ -78,9 +84,25 @@ def bar_panel(ax, values, errs, title, ylabel, value_fmt="{:.0f}"):
 
 def save(fig, name):
     fig.tight_layout()
-    fig.savefig(f"report/figures/{name}.png", dpi=200, bbox_inches="tight")
+    out = os.path.join(REPO_ROOT, "report", "figures", f"{name}.png")
+    fig.savefig(out, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"saved report/figures/{name}.png")
+
+
+def load_erase(run):
+    """results/<run>/erase_cnt.txt -> 블록별 erase 횟수 배열.
+
+    NF==7 가드는 run_experiment.sh의 awk와 같은 이유 -- 파일 앞머리의
+    GC_VALID_PAGE_MIGRATE_CNT / DIAG_* 헤더 줄은 필드가 2개뿐이라 블록 줄이 아님.
+    """
+    vals = []
+    with open(os.path.join(REPO_ROOT, "results", run, "erase_cnt.txt")) as f:
+        for line in f:
+            parts = line.split()
+            if len(parts) == 7:
+                vals.append(int(parts[6]))
+    return np.array(vals)
 
 
 # =====================================================================
@@ -140,41 +162,134 @@ lat_avg, lat_avg_err = stats(lat_avg_us_raw)
 lat_p99, lat_p99_err = stats(lat_p99_us_raw)
 
 # =====================================================================
-# Fig 1: hotcold v7 최종 비교 (fix 적용 후, 3회 반복) — migration/erase 효율
+# Fig 1: 워크로드별 블록 마모 분포 (세 워크로드 x 세 정책, 블록 단위 raw 분포)
+# 집계값이 아니라 erase_cnt.txt의 131,072개 블록을 그대로 읽어서 그림.
+# 워크로드마다 기록한 총 바이트가 달라(uniform 146.5GiB / hotcold 102~167GiB /
+# filebench 87~90GiB) 워크로드 간 절대 높이 비교는 의미가 없음 -- 이 그림이
+# 보여주는 건 "같은 워크로드 안에서 정책별로 마모가 어떻게 퍼지는가"의 형태.
+# =====================================================================
+DIST_RUNS = {
+    "uniform\n(600 MiB file, 1.3% util.)": {
+        "greedy": "20260731_110103_policy0_greedy_final31_rep1",
+        "costbenefit": "20260731_110936_policy2_costbenefit_final31_rep1",
+        "random": "20260731_110520_policy1_random_final31_rep1"},
+    "hotcold v7\n(separated hot / cold)": {
+        "greedy": "20260730_231827_policy0_greedy_vpcdiag_rep1",
+        "costbenefit": "20260730_232507_policy2_costbenefit_vpcdiag_rep1",
+        "random": "20260730_234613_policy1_random_vpcdiag_rep1"},
+    "filebench\n(2 GiB, randwrite + fsync)": {
+        "greedy": "20260731_111951_policy0_greedy_final31_filebench",
+        "costbenefit": "20260731_112358_policy2_costbenefit_final31_filebench",
+        "random": "20260731_112155_policy1_random_final31_filebench"},
+}
+
+dist = {wl: {p: load_erase(r) for p, r in runs.items()} for wl, runs in DIST_RUNS.items()}
+wls = list(DIST_RUNS.keys())
+GROUP_W, MARK_W = 0.72, 0.20
+
+fig, (ax_a, ax_b) = plt.subplots(2, 1, figsize=(11, 8.6),
+                                 gridspec_kw={"height_ratios": [1.55, 1]})
+
+for gi, wl in enumerate(wls):
+    for pi, pol in enumerate(ORDER):
+        arr = dist[wl][pol]
+        nz = arr[arr > 0]
+        pos = gi + (pi - 1) * (GROUP_W / 3)
+        bp = ax_a.boxplot([nz], positions=[pos], widths=MARK_W, patch_artist=True,
+                          whis=(0, 100), showfliers=False, zorder=3)
+        for box in bp["boxes"]:
+            box.set(facecolor=COLOR[pol], edgecolor=SURFACE, linewidth=2.0)
+        for part in bp["whiskers"] + bp["caps"]:
+            part.set(color=COLOR[pol], linewidth=1.6)
+        for med in bp["medians"]:
+            med.set(color=SURFACE, linewidth=2.0)
+        ax_a.annotate(f"{nz.max()}", xy=(pos, nz.max()), xytext=(0, 5),
+                      textcoords="offset points", ha="center", va="bottom",
+                      fontsize=8.5, color=INK_SECONDARY)
+
+ax_a.set_yscale("log")
+ax_a.set_ylim(0.8, 420)
+ax_a.set_yticks([1, 2, 5, 10, 20, 50, 100, 200])
+ax_a.set_yticklabels(["1", "2", "5", "10", "20", "50", "100", "200"])
+ax_a.minorticks_off()
+ax_a.set_ylabel("Erase count per block (log scale)")
+ax_a.set_xticks(range(len(wls)))
+ax_a.set_xticklabels([])
+ax_a.set_xlim(-0.55, len(wls) - 0.45)
+ax_a.tick_params(axis="both", length=0)
+ax_a.grid(axis="x", visible=False)
+ax_a.spines[["top", "right", "left"]].set_visible(False)
+ax_a.set_title("Distribution of erase counts over erased blocks  "
+               "(box = IQR, whiskers = min-max, label = max)",
+               color=INK_PRIMARY, fontsize=11.5, pad=10, loc="left")
+ax_a.legend(handles=[Patch(facecolor=COLOR[p], label=LABEL[p]) for p in ORDER],
+            loc="lower right", bbox_to_anchor=(1.0, 1.01), frameon=False, ncol=3,
+            fontsize=9.5, labelcolor=INK_SECONDARY, handlelength=1.1,
+            handleheight=1.1, columnspacing=1.6)
+
+for gi, wl in enumerate(wls):
+    for pi, pol in enumerate(ORDER):
+        arr = dist[wl][pol]
+        pct = float((arr > 0).sum()) / TOTAL_BLOCKS * 100
+        pos = gi + (pi - 1) * (GROUP_W / 3)
+        ax_b.bar([pos], [pct], width=MARK_W, color=COLOR[pol], zorder=3,
+                 edgecolor=SURFACE, linewidth=2.0)
+        ax_b.annotate(f"{pct:.1f}%", xy=(pos, pct), xytext=(0, 4),
+                      textcoords="offset points", ha="center", va="bottom",
+                      fontsize=8.5, color=INK_SECONDARY)
+
+ax_b.set_xticks(range(len(wls)))
+ax_b.set_xticklabels(wls, fontsize=10)
+ax_b.set_xlim(-0.55, len(wls) - 0.45)
+ax_b.set_ylim(0, 100)
+ax_b.set_ylabel("Blocks erased at least once (%)")
+ax_b.tick_params(axis="both", length=0)
+ax_b.grid(axis="x", visible=False)
+ax_b.spines[["top", "right", "left"]].set_visible(False)
+ax_b.set_title(f"Share of the {TOTAL_BLOCKS:,} physical blocks that were erased at least once",
+               color=INK_PRIMARY, fontsize=11.5, pad=10, loc="left")
+
+fig.suptitle("Per-block wear distribution by workload and GC policy",
+             fontsize=13.5, color=INK_PRIMARY, x=0.055, ha="left", y=0.985)
+fig.tight_layout(rect=[0, 0, 1, 0.955])
+save(fig, "fig1_wear_distribution")
+
+# =====================================================================
+# Fig 2: hotcold v7 최종 비교 (fix 적용 후, 3회 반복) — migration/erase 효율
 # =====================================================================
 fig, axes = plt.subplots(1, 2, figsize=(10, 4.2))
 bar_panel(axes[0], migrate_gib, migrate_gib_err,
-          "GC당 이동한 valid page 수 (GiB당)", "migrate pages / GiB", "{:.0f}")
+          "Valid pages migrated per GiB written", "migrate pages / GiB", "{:.0f}")
 bar_panel(axes[1], erase_gib, erase_gib_err,
-          "블록 erase 횟수 (GiB당)", "erases / GiB", "{:.1f}")
-fig.suptitle("hotcold v7 — GC 효율 비교 (버그 수정 후, 3회 반복 평균 ± 표준편차)",
+          "Block erases per GiB written", "erases / GiB", "{:.1f}")
+fig.suptitle("hotcold v7 — GC efficiency (after bug fix, mean ± sd of 3 runs)",
              fontsize=13, color=INK_PRIMARY, y=1.03)
-save(fig, "fig1_hotcold_efficiency")
+save(fig, "fig2_hotcold_efficiency")
 
 # =====================================================================
-# Fig 2: hotcold v7 — 웨어 레벨링 (erase max, nonzero_blocks)
+# Fig 3: hotcold v7 — 웨어 레벨링 (erase max, nonzero_blocks)
 # =====================================================================
 fig, axes = plt.subplots(1, 2, figsize=(10, 4.2))
 bar_panel(axes[0], erase_max, erase_max_err,
-          "블록 하나의 최대 erase 횟수 (peak wear)", "erase max (회)", "{:.1f}")
+          "Peak wear: highest erase count of any block", "erase max", "{:.1f}")
 bar_panel(axes[1], nonzero, nonzero_err,
-          "erase가 1회 이상 일어난 블록 수", "nonzero blocks (개)", "{:.0f}")
-fig.suptitle("hotcold v7 — 웨어 레벨링 비교 (버그 수정 후, 3회 반복)",
+          "Blocks erased at least once", "nonzero blocks", "{:.0f}")
+fig.suptitle("hotcold v7 — wear leveling (after bug fix, 3 runs)",
              fontsize=13, color=INK_PRIMARY, y=1.03)
-save(fig, "fig2_hotcold_wear_leveling")
+save(fig, "fig3_hotcold_wear_leveling")
 
 # =====================================================================
-# Fig 3: hotcold v7 — latency
+# Fig 4: hotcold v7 — latency
 # =====================================================================
 fig, axes = plt.subplots(1, 2, figsize=(10, 4.2))
-bar_panel(axes[0], lat_avg, lat_avg_err, "쓰기 평균 지연시간", "latency avg (μs)", "{:.1f}")
-bar_panel(axes[1], lat_p99, lat_p99_err, "쓰기 p99 tail 지연시간", "latency p99 (μs)", "{:.0f}")
-fig.suptitle("hotcold v7 — 호스트 IO 지연시간 비교 (버그 수정 후, 3회 반복)",
+bar_panel(axes[0], lat_avg, lat_avg_err, "Average write latency", "latency avg (us)", "{:.1f}")
+bar_panel(axes[1], lat_p99, lat_p99_err, "p99 tail write latency", "latency p99 (us)", "{:.0f}")
+fig.suptitle("hotcold v7 — host IO latency (after bug fix, 3 runs)",
              fontsize=13, color=INK_PRIMARY, y=1.03)
-save(fig, "fig3_hotcold_latency")
+save(fig, "fig4_hotcold_latency")
 
 # =====================================================================
-# Fig 4: uniform 비교 (raw, 정규화 불필요 — 항상 동일 바이트 기록)
+# Fig 5: uniform 비교 (raw, 정규화 불필요 — 항상 동일 바이트 기록)
 # 출처: results/*_final31_rep{1,2,3} (2026-07-31, migration 카운터/진단 포함된 최종 빌드)
 # =====================================================================
 uni_sum_raw = {
@@ -197,15 +312,16 @@ uni_max, uni_max_err = stats(uni_max_raw)
 uni_migrate, uni_migrate_err = stats(uni_migrate_raw)
 
 fig, axes = plt.subplots(1, 3, figsize=(14, 4.2))
-bar_panel(axes[0], uni_migrate, uni_migrate_err, "GC 중 옮긴 valid page 총합", "migrate pages (개)", "{:.0f}")
-bar_panel(axes[1], uni_sum, uni_sum_err, "총 erase 횟수 (raw, 정규화 불필요)", "erase sum (회)", "{:.0f}")
-bar_panel(axes[2], uni_max, uni_max_err, "블록 하나의 최대 erase 횟수", "erase max (회)", "{:.1f}")
-fig.suptitle("uniform 워크로드 — Greedy=Cost-Benefit 구조적 수렴(migrate=0), Random 트레이드오프 (3회 반복)",
+bar_panel(axes[0], uni_migrate, uni_migrate_err, "Total valid pages migrated by GC", "migrate pages", "{:.0f}")
+bar_panel(axes[1], uni_sum, uni_sum_err, "Total block erases (raw, no normalization)", "erase sum", "{:.0f}")
+bar_panel(axes[2], uni_max, uni_max_err, "Peak wear: highest erase count", "erase max", "{:.1f}")
+fig.suptitle("uniform — Greedy and Cost-Benefit converge structurally (migrate = 0); "
+             "Random trades off (3 runs)",
              fontsize=13, color=INK_PRIMARY, y=1.03)
-save(fig, "fig4_uniform_comparison")
+save(fig, "fig5_uniform_comparison")
 
 # =====================================================================
-# Fig 5: filebench 비교 (1회 측정, 보조 데이터)
+# Fig 8: filebench 비교 (1회 측정, 보조 데이터)
 # 출처: results/*_final31_filebench (2026-07-31, migration 카운터/진단 포함된 최종 빌드)
 # =====================================================================
 fb_migrate_gib = {"greedy": 0.0, "costbenefit": 0.0, "random": 8590.8}
@@ -214,16 +330,17 @@ fb_max = {"greedy": 3.0, "costbenefit": 3.0, "random": 8.0}
 fb_nonzero = {"greedy": 57212.0, "costbenefit": 55472.0, "random": 82588.0}
 
 fig, axes = plt.subplots(1, 4, figsize=(17.5, 4.2))
-bar_panel(axes[0], fb_migrate_gib, None, "migration 비용 (GiB당)", "migrate pages / GiB", "{:.0f}")
-bar_panel(axes[1], fb_erase_gib, None, "erase 효율 (GiB당)", "erases / GiB", "{:.0f}")
-bar_panel(axes[2], fb_max, None, "블록 최대 erase 횟수", "erase max (회)", "{:.0f}")
-bar_panel(axes[3], fb_nonzero, None, "erase된 블록 수", "nonzero blocks (개)", "{:.0f}")
-fig.suptitle("Filebench — fio 결과 재확인용 보조 벤치마크 (1회 측정, 최종 빌드, 2GB/120초/4스레드)",
+bar_panel(axes[0], fb_migrate_gib, None, "Migration cost per GiB", "migrate pages / GiB", "{:.0f}")
+bar_panel(axes[1], fb_erase_gib, None, "Erase cost per GiB", "erases / GiB", "{:.0f}")
+bar_panel(axes[2], fb_max, None, "Peak wear", "erase max", "{:.0f}")
+bar_panel(axes[3], fb_nonzero, None, "Blocks erased at least once", "nonzero blocks", "{:.0f}")
+fig.suptitle("Filebench — secondary benchmark confirming the fio result "
+             "(single run, final build, 2 GiB / 120 s / 4 threads)",
              fontsize=13, color=INK_PRIMARY, y=1.03)
-save(fig, "fig5_filebench_comparison")
+save(fig, "fig8_filebench_comparison")
 
 # =====================================================================
-# Fig 6: vpc divergence 분석 (diag_scan_greedy_vs_cb, 3회 반복 평균)
+# Fig 9: vpc divergence 분석 (diag_scan_greedy_vs_cb, 3회 반복 평균)
 # =====================================================================
 avg_greedy_vpc_raw = {
     "greedy": [80.707, 78.142, 77.171],
@@ -246,17 +363,18 @@ avg_cb_vpc, _ = stats(avg_cb_vpc_raw)
 abs_diff, abs_diff_err = stats(abs_diff_raw)
 
 fig, axes = plt.subplots(1, 2, figsize=(11, 4.4))
-groups = ["Greedy 구동 중", "Cost-Benefit 구동 중", "Random 구동 중"]
+groups = ["running Greedy", "running Cost-Benefit", "running Random"]
 x = np.arange(len(groups))
 w = 0.32
 axes[0].bar(x - w / 2, [avg_greedy_vpc[k] for k in ORDER], width=w, color=COLOR["greedy"],
-            label="Greedy가 골랐을 line의 vpc", zorder=3)
+            label="vpc of the line Greedy would pick", zorder=3)
 axes[0].bar(x + w / 2, [avg_cb_vpc[k] for k in ORDER], width=w, color=COLOR["costbenefit"],
-            label="Cost-Benefit이 골랐을 line의 vpc", zorder=3)
+            label="vpc of the line Cost-Benefit would pick", zorder=3)
 axes[0].set_xticks(x)
 axes[0].set_xticklabels(groups)
-axes[0].set_ylabel("victim line의 평균 vpc (valid page 수)")
-axes[0].set_title("실제 구동 정책별, 두 정책이 '골랐을' victim의 vpc", loc="left", fontsize=11.5, pad=10)
+axes[0].set_ylabel("mean vpc of victim line (valid pages)")
+axes[0].set_title("Victim each policy would pick, under each running policy",
+                  loc="left", fontsize=11.5, pad=10)
 axes[0].spines[["top", "right", "left"]].set_visible(False)
 axes[0].grid(axis="x", visible=False)
 axes[0].legend(frameon=False, fontsize=9, loc="upper right")
@@ -268,9 +386,10 @@ errors = [abs_diff_err[k] for k in ORDER]
 bars = ax2.bar(x, heights, yerr=errors, width=0.5, color=[COLOR[k] for k in ORDER], zorder=3,
                capsize=5, error_kw={"ecolor": INK_SECONDARY, "elinewidth": 1.2, "capthick": 1.2})
 ax2.set_xticks(x)
-ax2.set_xticklabels(["Greedy 구동\n중", "Cost-Benefit 구동\n중", "Random 구동\n중"])
-ax2.set_ylabel("avg |vpc_greedy − vpc_cb|  (평균 vpc 차이)")
-ax2.set_title("다르게 고른 line 간 vpc 차이 (avg_abs_vpc_diff)", loc="left", fontsize=11.5, pad=10)
+ax2.set_xticklabels(["running\nGreedy", "running\nCost-Benefit", "running\nRandom"])
+ax2.set_ylabel("avg |vpc_greedy - vpc_cb|")
+ax2.set_title("Cost gap between the two picks (avg_abs_vpc_diff)",
+              loc="left", fontsize=11.5, pad=10)
 ax2.spines[["top", "right", "left"]].set_visible(False)
 ax2.grid(axis="x", visible=False)
 for rect, k in zip(bars, ORDER):
@@ -279,12 +398,13 @@ for rect, k in zip(bars, ORDER):
                  xytext=(0, 4), textcoords="offset points", ha="center", fontsize=9, color=INK_SECONDARY)
 ax2.margins(y=0.2)
 
-fig.suptitle("victim divergence 분석 — 다른 line을 고르면 실제로 비용(vpc)도 다른가?",
+fig.suptitle("Victim divergence — when the two policies pick different lines, "
+             "does the cost (vpc) differ too?",
              fontsize=13, color=INK_PRIMARY, y=1.04)
-save(fig, "fig6_vpc_divergence")
+save(fig, "fig9_vpc_divergence")
 
 # =====================================================================
-# Fig 7 (보너스): 힙 staleness 버그 수정 전/후 — Cost-Benefit의 migrate_pages/GiB
+# Fig 10 (보너스): 힙 staleness 버그 수정 전/후 — Cost-Benefit의 migrate_pages/GiB
 # 출처: results/*_migtest*(수정 전), results/*_vpcdiag_rep*(수정 후)
 # =====================================================================
 prefix_cb = [53209.2, 54392.9, 48883.2]
@@ -301,20 +421,20 @@ for xi, pts in zip(x, [prefix_cb, postfix_cb]):
     jitter = np.linspace(-0.08, 0.08, len(pts))
     ax.scatter(xi + jitter, pts, color=INK_PRIMARY, s=22, zorder=4, alpha=0.75)
 ax.axhline(greedy_ref, color=COLOR["greedy"], linestyle="--", linewidth=1.4, zorder=2)
-ax.annotate("Greedy 평균 (참고선, 버그와 무관)", xy=(1.0, greedy_ref),
+ax.annotate("Greedy mean (reference, unaffected by the bug)", xy=(1.0, greedy_ref),
             xytext=(0.02, greedy_ref - 4200), fontsize=9, color=COLOR["greedy"])
 ax.set_xticks(x)
-ax.set_xticklabels(["수정 전\n(힙 staleness 버그 있음)", "수정 후\n(전체 스캔으로 교체)"])
+ax.set_xticklabels(["before fix\n(heap staleness bug)", "after fix\n(replaced with a full scan)"])
 ax.set_ylabel("Cost-Benefit migrate pages / GiB")
-ax.set_title("힙 staleness 버그 수정 전후 — Cost-Benefit의 migration 비용 변화",
-              loc="left", fontsize=12.5, pad=12)
+ax.set_title("Cost-Benefit migration cost, before and after the heap staleness fix",
+             loc="left", fontsize=12.5, pad=12)
 ax.spines[["top", "right", "left"]].set_visible(False)
 ax.grid(axis="x", visible=False)
 ax.margins(y=0.22)
-save(fig, "fig7_bugfix_before_after")
+save(fig, "fig10_bugfix_before_after")
 
 # =====================================================================
-# Fig 8: 워크로드가 정책 차이를 만드는가 — uniform vs hotcold 대비
+# Fig 7: 워크로드가 정책 차이를 만드는가 — uniform vs hotcold 대비
 # 출처: results/*_uniformdiag/ (2026-07-31), results/*_vpcdiag_rep*/
 # =====================================================================
 fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.3))
@@ -325,8 +445,8 @@ NEUTRAL = "#898781"
 # (1) 두 정책이 서로 다른 line을 고른 비율
 diverge_pct = [0.0, 90.3]
 b = axes[0].bar(xw, diverge_pct, width=0.5, color=[NEUTRAL, COLOR["costbenefit"]], zorder=3)
-axes[0].set_ylabel("Greedy와 CB가 다른 line을 고른 비율 (%)")
-axes[0].set_title("정책 선택이 갈리는가", loc="left", fontsize=11.5, pad=10)
+axes[0].set_ylabel("GC decisions where Greedy and CB differ (%)")
+axes[0].set_title("Do the policies pick differently?", loc="left", fontsize=11.5, pad=10)
 axes[0].set_ylim(0, 100)
 for r, v in zip(b, diverge_pct):
     axes[0].annotate(f"{v:.1f}%", xy=(r.get_x() + r.get_width() / 2, v), xytext=(0, 4),
@@ -335,8 +455,8 @@ for r, v in zip(b, diverge_pct):
 # (2) 고른 line의 비용(vpc) 차이
 vpc_diff = [0.0, 33.8]
 b = axes[1].bar(xw, vpc_diff, width=0.5, color=[NEUTRAL, COLOR["costbenefit"]], zorder=3)
-axes[1].set_ylabel("avg |vpc_greedy − vpc_cb|")
-axes[1].set_title("갈린 선택이 비용 차이로 이어지는가", loc="left", fontsize=11.5, pad=10)
+axes[1].set_ylabel("avg |vpc_greedy - vpc_cb|")
+axes[1].set_title("Does a different pick cost differently?", loc="left", fontsize=11.5, pad=10)
 for r, v in zip(b, vpc_diff):
     axes[1].annotate(f"{v:.1f}", xy=(r.get_x() + r.get_width() / 2, v), xytext=(0, 4),
                      textcoords="offset points", ha="center", fontsize=10, color=INK_SECONDARY)
@@ -344,8 +464,8 @@ for r, v in zip(b, vpc_diff):
 # (3) GC 한 번당 실제로 옮긴 valid page 수
 mig_per_gc = [0.0, 88.1]
 b = axes[2].bar(xw, mig_per_gc, width=0.5, color=[NEUTRAL, COLOR["costbenefit"]], zorder=3)
-axes[2].set_ylabel("GC 1회당 이동한 valid page 수")
-axes[2].set_title("GC에 비용이 드는가 (Cost-Benefit 기준)", loc="left", fontsize=11.5, pad=10)
+axes[2].set_ylabel("valid pages migrated per GC")
+axes[2].set_title("Does GC cost anything at all? (Cost-Benefit)", loc="left", fontsize=11.5, pad=10)
 for r, v in zip(b, mig_per_gc):
     axes[2].annotate(f"{v:.1f}", xy=(r.get_x() + r.get_width() / 2, v), xytext=(0, 4),
                      textcoords="offset points", ha="center", fontsize=10, color=INK_SECONDARY)
@@ -357,8 +477,9 @@ for ax in axes:
     ax.grid(axis="x", visible=False)
     ax.margins(y=0.2)
 
-fig.suptitle("워크로드가 정책 차이를 결정한다 — uniform에서는 두 정책이 '증명 가능하게' 동일",
+fig.suptitle("The workload decides whether the policies can differ — "
+             "under uniform they are provably identical",
              fontsize=13, color=INK_PRIMARY, y=1.04)
-save(fig, "fig8_workload_decides")
+save(fig, "fig7_workload_decides")
 
 print("done.")
