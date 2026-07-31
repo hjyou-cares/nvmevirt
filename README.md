@@ -5,7 +5,7 @@
 >
 > | 항목 | 위치 |
 > |---|---|
-> | **보고서 (제출본)** | [`report/REPORT.pdf`](report/REPORT.pdf) — 같은 내용의 [HTML](report/REPORT.html) / [Markdown](report/REPORT.md) 원본도 함께 있습니다 |
+> | **보고서 (제출본)** | [`report/실습 1_NVMeVirt Cost-Benefit GC 구현 및 성능 분석_유형진_인턴.pdf`](report/실습 1_NVMeVirt Cost-Benefit GC 구현 및 성능 분석_유형진_인턴.pdf) — 같은 내용의 [HTML](report/REPORT.html) / [Markdown](report/REPORT.md) 원본도 함께 있습니다 |
 > | 보고서 그래프 | [`report/figures/`](report/figures) (fig1~fig6) |
 > | 구현 코드 | [`conv_ftl.c`](conv_ftl.c) / [`conv_ftl.h`](conv_ftl.h) (정책 구현), [`main.c`](main.c) (`/proc/nvmev/debug` 측정 인터페이스) |
 > | 실험 스크립트 | [`scripts/`](scripts) |
