@@ -102,3 +102,29 @@
 3. SLC/TLC 설정의 누락 여부를 사용자 또는 조교 자료에서 확인한다.
 4. 설정이 확정되면 동작 변경 없이 config와 경계값 검증부터 추가한다.
 
+## 2026-08-13: baseline build 1차 확인
+
+### 수행한 작업
+
+- 실습1 완료 코드를 변경하지 않은 상태에서 `make`를 실행했다.
+- module load, mount, `mkfs` 및 benchmark는 수행하지 않았다.
+
+### 검증 결과
+
+- **build 실패 (환경 문제)**
+- 현재 실행 커널은 `6.18.33.2-microsoft-standard-WSL2`이다.
+- Makefile이 요구한 kernel build directory
+  `/lib/modules/6.18.33.2-microsoft-standard-WSL2/build`가 존재하지 않아 module
+  compilation이 시작되기 전에 종료됐다.
+- 따라서 이번 결과는 NVMeVirt source의 compile error를 의미하지 않는다.
+
+### 변경한 내용
+
+- 구현 코드 변경 없음
+- 이 진행 기록만 갱신
+
+### 남은 위험과 다음 확인
+
+- WSL2에서 NVMeVirt kernel module을 실제로 build/load할 수 있는 환경인지 확인이 필요하다.
+- 실습1에서 사용한 Ubuntu VM 또는 실험 서버가 현재도 사용 가능한지 확인해야 한다.
+- 실제 build 환경이 정해질 때까지 module load 및 block device 검증을 진행하지 않는다.
