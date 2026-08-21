@@ -13,7 +13,8 @@
 
 - 권장 실습1 기준 commit: `ae28ab11cd11769358c0bc578ee65f055b28c5a9`
 - 현재 작업 branch: `practice2-slc-cache`
-- 현재 실습2 구현은 branch 커밋보다 worktree 변경에 더 많이 남아 있다.
+- 최신 작업 commit은 `8aa39ca` (`Add SLC migration scaffolding and session docs`)다.
+- 서버 `~/nvmevirt`도 `practice2-slc-cache`의 `8aa39ca`까지 동기화됐다.
 
 ## 현재까지 구현된 흐름
 
@@ -47,6 +48,7 @@
 ## 작업 시 주의사항
 
 - 시작할 때 긴 조사 문서를 전부 다시 읽지 않는다.
+- 다음 세션은 서버 SSH 접속 후 `~/nvmevirt`에서 시작하는 것을 기본 전제로 한다.
 - 현재 흐름 확인은 `git status`, `git diff --stat`, `docs/CURRENT_TASK.md`로 끝낸다.
 - 과제 공식 문구가 다시 필요할 때만 `docs/PRACTICE2_AGENTS`를 읽는다.
 - 실습1의 TLC GC 정책과 실습2의 SLC migration 정책을 같은 문제로 취급하지 않는다.

@@ -320,3 +320,32 @@
 - 이 검증은 기능 smoke 수준이며 read-back 또는 `fio verify` 기반 데이터 정합성 검증은 아직 없다.
 - 로컬 VM은 용량이 작아 파일시스템 ENOSPC가 쉽게 섞이므로 정책 비교 실험 환경으로는 부적합할 수 있다.
 - policy 비교는 서버에서 fresh reload 조건(`umount -> rmmod -> insmod -> mkfs -> mount`)으로 다시 수행해야 한다.
+
+## 2026-08-21: commit/push 및 서버 동기화 마무리
+
+### 확인한 내용
+
+- 로컬 작업 트리의 실습2 코드와 인계 문서를 하나의 커밋으로 정리할 수 있는 상태였다.
+- 서버 저장소는 처음에는 `main` 브랜치에 있었고, `origin/practice2-slc-cache`에는 최신 commit `8aa39ca`가 존재했다.
+
+### 변경한 내용
+
+- 로컬에서 다음 커밋을 만들었다.
+  - `8aa39ca` `Add SLC migration scaffolding and session docs`
+- 이후 원격 `origin/practice2-slc-cache`로 push를 완료했다.
+- 서버에서는 `practice2-slc-cache`를 checkout하고 `git pull origin practice2-slc-cache`로 최신 상태를 반영했다.
+
+### 변경 이유
+
+- 다음 세션의 실제 실험은 로컬 VM이 아니라 서버에서 진행하기로 했으므로, 서버가 현재 실습2 코드와 동일한 commit을 가리키도록 맞춰 둘 필요가 있었다.
+- branch가 `main`에 머물러 있으면 사용자가 서버에서 오래된 코드로 실험을 시작할 위험이 있다.
+
+### 검증 결과
+
+- 서버 `~/nvmevirt`에서 `git log --oneline -n 5` 기준 `HEAD -> practice2-slc-cache`, `origin/practice2-slc-cache`가 모두 `8aa39ca`를 가리키는 것을 확인했다.
+- 서버 `git status --short`는 빈 출력이었고 clean worktree 상태였다.
+
+### 남은 위험
+
+- 다음 세션은 서버에서 시작하되, 실험 전에 `make`와 block device 경로(`/dev/nvme1n1`)를 다시 한 번 확인해야 한다.
+- 아직 정책 비교 실험과 데이터 정합성 검증은 수행하지 않았다.

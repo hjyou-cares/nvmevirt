@@ -2,11 +2,12 @@
 
 ## 현재 흐름
 
-- 실습2 WIP는 아직 미커밋 상태다.
+- 실습2 WIP는 commit `8aa39ca`로 로컬/원격에 반영됐다.
 - 핵심 변경 파일은 `conv_ftl.c`, `conv_ftl.h`, `main.c`, `ssd_config.h`다.
 - 현재 코드는 SLC/TLC pool metadata, pool-aware write path, SLC migration 첫 연결, migration/TLC GC counter 분리, migration policy 분리까지 들어간 상태다.
 - 현재 worktree 기준 `SLC_CACHE_RATIO_PERCENT`는 `10`이라 SLC path가 컴파일 시 기본 활성이다.
 - 로컬 VM smoke test에서는 SLC write, SLC to TLC migration, TLC GC가 모두 실제로 발생하는 것까지 확인했다.
+- 서버 저장소 `~/nvmevirt`도 `practice2-slc-cache` 브랜치의 `8aa39ca`까지 동기화된 상태다.
 
 ## 다음에 바로 할 일
 
@@ -42,6 +43,14 @@
   - `TLC_GC_VALID_PAGE_MIGRATE_CNT 0`
 - 위 결과는 현재 코드에서 SLC migration과 TLC GC 경로가 실제로 동작함을 보여준다.
 - 같은 smoke workload에서는 `DIAG_*` 값이 모두 `0`이라 Greedy와 Cost-Benefit 차이는 아직 드러나지 않았다.
+- 로컬 변경은 commit `8aa39ca` (`Add SLC migration scaffolding and session docs`)로 정리했고, 원격 `origin/practice2-slc-cache`에도 push 완료했다.
+- 서버에서는 `main`이 아니라 `practice2-slc-cache`로 checkout 후 `git pull origin practice2-slc-cache`까지 완료했고, `git log`에서 `8aa39ca`를 확인했다.
+
+## 다음 세션 시작점
+
+- 다음 세션은 서버에 SSH 접속한 뒤 `~/nvmevirt`에서 시작한다.
+- 서버 시작 확인 순서는 `git branch --show-current`, `git status --short`, `make` 정도면 충분하다.
+- 목표는 서버에서 `slc_migration_policy=0/1/2/3` 비교와 실험 스크립트 정리다.
 
 ## 참고 문서
 
