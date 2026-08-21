@@ -9,13 +9,20 @@
 #include "nvmev.h"
 #include "conv_ftl.h"
 
-enum gc_victim_policy {
-	GC_POLICY_GREEDY = 0,
-	GC_POLICY_RANDOM = 1,
-	GC_POLICY_COST_BENEFIT = 2,
+enum tlc_gc_victim_policy {
+	TLC_GC_POLICY_GREEDY = 0,
+	TLC_GC_POLICY_RANDOM = 1,
+	TLC_GC_POLICY_COST_BENEFIT = 2,
 };
 
-static unsigned int gc_policy = GC_POLICY_GREEDY;
+enum slc_migration_victim_policy {
+	SLC_MIGRATION_POLICY_GREEDY = 0,
+	SLC_MIGRATION_POLICY_RANDOM = 1,
+	SLC_MIGRATION_POLICY_FIFO = 2,
+	SLC_MIGRATION_POLICY_COST_BENEFIT = 3,
+};
+
+static unsigned int gc_policy = TLC_GC_POLICY_GREEDY;
 /* 0444 (read-only at runtime) on purpose: set this with an insmod parameter,
  * never by writing to /sys/module/nvmev/parameters/gc_policy. Switching from
  * Cost-Benefit to Greedy on a live module leaves the victim heap ordered by
@@ -25,7 +32,13 @@ static unsigned int gc_policy = GC_POLICY_GREEDY;
  * pointer, the free line list -- which contaminated an earlier cross-policy
  * comparison; see CLAUDE.md.) Reading it back is still allowed. */
 module_param(gc_policy, uint, 0444);
-MODULE_PARM_DESC(gc_policy, "GC victim selection policy: 0=Greedy, 1=Random, 2=Cost-Benefit");
+MODULE_PARM_DESC(gc_policy,
+		 "TLC GC victim selection policy: 0=Greedy, 1=Random, 2=Cost-Benefit");
+
+static unsigned int slc_migration_policy = SLC_MIGRATION_POLICY_GREEDY;
+module_param(slc_migration_policy, uint, 0444);
+MODULE_PARM_DESC(slc_migration_policy,
+		 "SLC migration victim selection policy: 0=Greedy, 1=Random, 2=FIFO, 3=Cost-Benefit");
 
 /* logical clock for Cost-Benefit GC: incremented once per page write.
  * Only ever touched from the single nvmev_dispatcher kthread, so no locking needed. */
@@ -36,6 +49,10 @@ static uint64_t cb_clock = 0;
  * so it barely differs between policies; this is the actual migration cost
  * Cost-Benefit is designed to reduce. Exposed via /proc/nvmev/debug. */
 uint64_t gc_valid_page_migrate_cnt = 0;
+uint64_t tlc_gc_cnt = 0;
+uint64_t tlc_gc_valid_page_migrate_cnt = 0;
+uint64_t slc_migration_cnt = 0;
+uint64_t slc_migration_valid_page_migrate_cnt = 0;
 
 /* GC victim divergence analysis (2026-07-30). Regardless of which gc_policy is
  * actually driving real GC, scan the raw victim queue on every
@@ -55,6 +72,11 @@ uint64_t diag_sum_cb_vpc = 0;
 uint64_t diag_sum_abs_vpc_diff = 0;
 uint64_t diag_same_vpc_diff_line = 0;
 
+enum reclaim_reason {
+	RECLAIM_REASON_TLC_GC = 0,
+	RECLAIM_REASON_SLC_MIGRATION = 1,
+};
+
 static inline bool last_pg_in_wordline(struct conv_ftl *conv_ftl, struct ppa *ppa)
 {
 	struct ssdparams *spp = &conv_ftl->ssd->sp;
@@ -63,12 +85,12 @@ static inline bool last_pg_in_wordline(struct conv_ftl *conv_ftl, struct ppa *pp
 
 static bool should_gc(struct conv_ftl *conv_ftl)
 {
-	return (conv_ftl->lm.free_line_cnt <= conv_ftl->cp.gc_thres_lines);
+	return (conv_ftl->slc_rt.tlc_lm.free_line_cnt <= conv_ftl->cp.gc_thres_lines);
 }
 
 static inline bool should_gc_high(struct conv_ftl *conv_ftl)
 {
-	return conv_ftl->lm.free_line_cnt <= conv_ftl->cp.gc_thres_lines_high;
+	return conv_ftl->slc_rt.tlc_lm.free_line_cnt <= conv_ftl->cp.gc_thres_lines_high;
 }
 
 static inline struct ppa get_maptbl_ent(struct conv_ftl *conv_ftl, uint64_t lpn)
@@ -143,7 +165,7 @@ static inline pqueue_pri_t victim_line_get_pri(void *a)
 {
 	struct line *line = (struct line *)a;
 
-	if (gc_policy == GC_POLICY_COST_BENEFIT)
+	if (gc_policy == TLC_GC_POLICY_COST_BENEFIT)
 		return cb_victim_pri(line);
 
 	return line->vpc;
@@ -165,6 +187,9 @@ static void diag_scan_greedy_vs_cb(pqueue_t *pq)
 		struct line *l = (struct line *)pq->d[i];
 		pqueue_pri_t pri = cb_victim_pri(l);
 
+		if (l->pool != LINE_POOL_TLC)
+			continue;
+
 		if (l->vpc < min_vpc) {
 			min_vpc = l->vpc;
 			greedy_pick = l;
@@ -174,6 +199,9 @@ static void diag_scan_greedy_vs_cb(pqueue_t *pq)
 			cb_pick = l;
 		}
 	}
+
+	if (!greedy_pick || !cb_pick)
+		return;
 
 	diag_total_gc++;
 	diag_sum_greedy_vpc += greedy_pick->vpc;
@@ -210,6 +238,10 @@ static inline void consume_write_credit(struct conv_ftl *conv_ftl)
 }
 
 static void foreground_gc(struct conv_ftl *conv_ftl);
+static void foreground_slc_migration(struct conv_ftl *conv_ftl);
+static enum line_pool_id get_configured_line_pool(struct conv_ftl *conv_ftl, uint32_t line_id);
+static void inc_pool_free_line_cnt(struct conv_ftl *conv_ftl, struct line *line);
+static int do_gc(struct conv_ftl *conv_ftl, bool force);
 
 static inline void check_and_refill_write_credit(struct conv_ftl *conv_ftl)
 {
@@ -246,18 +278,42 @@ static void init_lines(struct conv_ftl *conv_ftl)
 			.ipc = 0,
 			.vpc = 0,
 			.pos = 0,
+			.pool = get_configured_line_pool(conv_ftl, i),
 			.mtime = 0,
+			.close_seq = 0,
 			.entry = LIST_HEAD_INIT(lm->lines[i].entry),
 		};
 
 		/* initialize all the lines as free lines */
 		list_add_tail(&lm->lines[i].entry, &lm->free_line_list);
 		lm->free_line_cnt++;
+		inc_pool_free_line_cnt(conv_ftl, &lm->lines[i]);
 	}
 
 	NVMEV_ASSERT(lm->free_line_cnt == lm->tt_lines);
 	lm->victim_line_cnt = 0;
 	lm->full_line_cnt = 0;
+}
+
+static void init_slc_layout_metadata(struct conv_ftl *conv_ftl)
+{
+	struct ssdparams *spp = &conv_ftl->ssd->sp;
+	struct slc_cache_layout *layout = &conv_ftl->slc_layout;
+
+	layout->slc_ratio_percent = SLC_CACHE_RATIO_PERCENT;
+	layout->total_line_cnt = spp->tt_lines;
+	layout->slc_line_cnt = (layout->total_line_cnt * layout->slc_ratio_percent) / 100;
+	layout->tlc_line_cnt = layout->total_line_cnt - layout->slc_line_cnt;
+	layout->slc_line_boundary = layout->slc_line_cnt;
+
+	conv_ftl->slc_rt.slc_lm = (struct line_mgmt){ 0 };
+	conv_ftl->slc_rt.tlc_lm = (struct line_mgmt){ 0 };
+	conv_ftl->slc_rt.slc_wp = (struct write_pointer){ 0 };
+	conv_ftl->slc_rt.tlc_wp = (struct write_pointer){ 0 };
+	conv_ftl->slc_rt.tlc_gc_wp = (struct write_pointer){ 0 };
+	conv_ftl->slc_rt.line_close_seq = 0;
+	conv_ftl->slc_rt.slc_lm.tt_lines = layout->slc_line_cnt;
+	conv_ftl->slc_rt.tlc_lm.tt_lines = layout->tlc_line_cnt;
 }
 
 static void remove_lines(struct conv_ftl *conv_ftl)
@@ -280,6 +336,57 @@ static inline void check_addr(int a, int max)
 	NVMEV_ASSERT(a >= 0 && a < max);
 }
 
+static enum line_pool_id get_configured_line_pool(struct conv_ftl *conv_ftl, uint32_t line_id)
+{
+	struct slc_cache_layout *layout = &conv_ftl->slc_layout;
+
+	NVMEV_ASSERT(line_id < layout->total_line_cnt);
+
+	if (layout->slc_line_cnt == 0)
+		return LINE_POOL_TLC;
+
+	if (line_id < layout->slc_line_boundary)
+		return LINE_POOL_SLC;
+
+	return LINE_POOL_TLC;
+}
+
+static inline enum line_pool_id get_ppa_pool(struct conv_ftl *conv_ftl, struct ppa *ppa)
+{
+	return get_configured_line_pool(conv_ftl, ppa->g.blk);
+}
+
+static inline bool ppa_is_slc(struct conv_ftl *conv_ftl, struct ppa *ppa)
+{
+	return get_ppa_pool(conv_ftl, ppa) == LINE_POOL_SLC;
+}
+
+static struct line_mgmt *get_pool_free_lm(struct conv_ftl *conv_ftl, enum line_pool_id pool)
+{
+	if (pool == LINE_POOL_SLC)
+		return &conv_ftl->slc_rt.slc_lm;
+	if (pool == LINE_POOL_TLC)
+		return &conv_ftl->slc_rt.tlc_lm;
+
+	NVMEV_ASSERT(0);
+	return NULL;
+}
+
+static void dec_pool_free_line_cnt(struct conv_ftl *conv_ftl, struct line *line)
+{
+	struct line_mgmt *pool_lm = get_pool_free_lm(conv_ftl, line->pool);
+
+	NVMEV_ASSERT(pool_lm->free_line_cnt > 0);
+	pool_lm->free_line_cnt--;
+}
+
+static void inc_pool_free_line_cnt(struct conv_ftl *conv_ftl, struct line *line)
+{
+	struct line_mgmt *pool_lm = get_pool_free_lm(conv_ftl, line->pool);
+
+	pool_lm->free_line_cnt++;
+}
+
 static struct line *get_next_free_line(struct conv_ftl *conv_ftl)
 {
 	struct line_mgmt *lm = &conv_ftl->lm;
@@ -292,8 +399,250 @@ static struct line *get_next_free_line(struct conv_ftl *conv_ftl)
 
 	list_del_init(&curline->entry);
 	lm->free_line_cnt--;
+	dec_pool_free_line_cnt(conv_ftl, curline);
 	NVMEV_DEBUG("%s: free_line_cnt %d\n", __func__, lm->free_line_cnt);
 	return curline;
+}
+
+static struct line *get_next_free_line_by_pool(struct conv_ftl *conv_ftl, enum line_pool_id pool)
+{
+	struct line_mgmt *lm = &conv_ftl->lm;
+	struct line *line = NULL;
+
+	list_for_each_entry(line, &lm->free_line_list, entry) {
+		if (line->pool != pool)
+			continue;
+
+		list_del_init(&line->entry);
+		lm->free_line_cnt--;
+		dec_pool_free_line_cnt(conv_ftl, line);
+		return line;
+	}
+
+	NVMEV_ERROR("No free line left in requested pool %d\n", pool);
+	return NULL;
+}
+
+static enum line_pool_id get_io_target_pool(struct conv_ftl *conv_ftl, uint32_t io_type)
+{
+	if (io_type == USER_IO) {
+		if (conv_ftl->slc_layout.slc_line_cnt > 0)
+			return LINE_POOL_SLC;
+		return LINE_POOL_TLC;
+	}
+
+	if (io_type == GC_IO)
+		return LINE_POOL_TLC;
+
+	NVMEV_ASSERT(0);
+	return LINE_POOL_TLC;
+}
+
+static bool should_migrate_slc(struct conv_ftl *conv_ftl)
+{
+	return conv_ftl->slc_layout.slc_line_cnt > 0 && conv_ftl->slc_rt.slc_lm.free_line_cnt == 0;
+}
+
+static struct line *select_tlc_gc_victim_line(struct conv_ftl *conv_ftl, bool force)
+{
+	struct ssdparams *spp = &conv_ftl->ssd->sp;
+	struct line_mgmt *lm = &conv_ftl->lm;
+	struct line *victim_line = NULL;
+	pqueue_t *pq = lm->victim_line_pq;
+	size_t i;
+
+	if (!pq || pq->size <= 1)
+		return NULL;
+
+	diag_scan_greedy_vs_cb(lm->victim_line_pq);
+
+	if (gc_policy == TLC_GC_POLICY_RANDOM) {
+		unsigned int eligible = 0;
+		unsigned int pick;
+
+		for (i = 1; i < pq->size; i++) {
+			struct line *cand = pq->d[i];
+
+			if (cand->pool == LINE_POOL_TLC)
+				eligible++;
+		}
+
+		if (eligible == 0)
+			return NULL;
+
+		pick = get_random_u32() % eligible;
+		for (i = 1; i < pq->size; i++) {
+			struct line *cand = pq->d[i];
+
+			if (cand->pool != LINE_POOL_TLC)
+				continue;
+			if (pick-- == 0) {
+				victim_line = cand;
+				break;
+			}
+		}
+	} else {
+		for (i = 1; i < pq->size; i++) {
+			struct line *cand = pq->d[i];
+
+			if (cand->pool != LINE_POOL_TLC)
+				continue;
+			if (!victim_line) {
+				victim_line = cand;
+				continue;
+			}
+
+			if (gc_policy == TLC_GC_POLICY_COST_BENEFIT) {
+				if (victim_line_get_pri(cand) < victim_line_get_pri(victim_line))
+					victim_line = cand;
+			} else if (cand->vpc < victim_line->vpc) {
+				victim_line = cand;
+			}
+		}
+	}
+
+	if (!victim_line)
+		return NULL;
+
+	if (!force && (victim_line->vpc > (spp->pgs_per_line / 8)))
+		return NULL;
+
+	pqueue_remove(pq, victim_line);
+	victim_line->pos = 0;
+	lm->victim_line_cnt--;
+
+	return victim_line;
+}
+
+static bool slc_migration_candidate_is_better(struct line *candidate,
+					      struct line *current_line)
+{
+	if (!current_line)
+		return true;
+
+	switch (slc_migration_policy) {
+	case SLC_MIGRATION_POLICY_FIFO:
+		if (candidate->close_seq != current_line->close_seq)
+			return candidate->close_seq < current_line->close_seq;
+		return candidate->vpc < current_line->vpc;
+	case SLC_MIGRATION_POLICY_COST_BENEFIT:
+		if (cb_victim_pri(candidate) != cb_victim_pri(current_line))
+			return cb_victim_pri(candidate) < cb_victim_pri(current_line);
+		if (candidate->vpc != current_line->vpc)
+			return candidate->vpc < current_line->vpc;
+		return candidate->close_seq < current_line->close_seq;
+	case SLC_MIGRATION_POLICY_GREEDY:
+	default:
+		if (candidate->vpc != current_line->vpc)
+			return candidate->vpc < current_line->vpc;
+		return candidate->close_seq < current_line->close_seq;
+	}
+}
+
+static unsigned int count_slc_migration_candidates(struct conv_ftl *conv_ftl)
+{
+	struct line_mgmt *lm = &conv_ftl->lm;
+	struct line *line;
+	pqueue_t *pq = lm->victim_line_pq;
+	unsigned int count = 0;
+	size_t i;
+
+	list_for_each_entry(line, &lm->full_line_list, entry) {
+		if (line->pool == LINE_POOL_SLC)
+			count++;
+	}
+
+	if (!pq)
+		return count;
+
+	for (i = 1; i < pq->size; i++) {
+		struct line *cand = pq->d[i];
+
+		if (cand->pool == LINE_POOL_SLC)
+			count++;
+	}
+
+	return count;
+}
+
+static struct line *pick_nth_slc_migration_candidate(struct conv_ftl *conv_ftl, unsigned int pick)
+{
+	struct line_mgmt *lm = &conv_ftl->lm;
+	struct line *line;
+	pqueue_t *pq = lm->victim_line_pq;
+	size_t i;
+
+	list_for_each_entry(line, &lm->full_line_list, entry) {
+		if (line->pool != LINE_POOL_SLC)
+			continue;
+		if (pick-- == 0)
+			return line;
+	}
+
+	if (!pq)
+		return NULL;
+
+	for (i = 1; i < pq->size; i++) {
+		struct line *cand = pq->d[i];
+
+		if (cand->pool != LINE_POOL_SLC)
+			continue;
+		if (pick-- == 0)
+			return cand;
+	}
+
+	return NULL;
+}
+
+static struct line *select_slc_migration_victim_line(struct conv_ftl *conv_ftl)
+{
+	struct line_mgmt *lm = &conv_ftl->lm;
+	struct line *victim_line = NULL;
+	struct line *line = NULL;
+	pqueue_t *pq = lm->victim_line_pq;
+	unsigned int eligible;
+	size_t i;
+
+	if (slc_migration_policy == SLC_MIGRATION_POLICY_RANDOM) {
+		eligible = count_slc_migration_candidates(conv_ftl);
+		if (eligible == 0)
+			return NULL;
+		victim_line = pick_nth_slc_migration_candidate(conv_ftl, get_random_u32() % eligible);
+		goto out;
+	}
+
+	list_for_each_entry(line, &lm->full_line_list, entry) {
+		if (line->pool != LINE_POOL_SLC)
+			continue;
+		if (slc_migration_candidate_is_better(line, victim_line))
+			victim_line = line;
+	}
+
+	if (pq) {
+		for (i = 1; i < pq->size; i++) {
+			struct line *cand = pq->d[i];
+
+			if (cand->pool != LINE_POOL_SLC)
+				continue;
+			if (slc_migration_candidate_is_better(cand, victim_line))
+				victim_line = cand;
+		}
+	}
+
+	if (!victim_line)
+		return NULL;
+
+out:
+	if (victim_line->pos) {
+		pqueue_remove(lm->victim_line_pq, victim_line);
+		lm->victim_line_cnt--;
+		victim_line->pos = 0;
+	} else {
+		list_del_init(&victim_line->entry);
+		lm->full_line_cnt--;
+	}
+
+	return victim_line;
 }
 
 static struct write_pointer *__get_wp(struct conv_ftl *ftl, uint32_t io_type)
@@ -311,7 +660,8 @@ static struct write_pointer *__get_wp(struct conv_ftl *ftl, uint32_t io_type)
 static void prepare_write_pointer(struct conv_ftl *conv_ftl, uint32_t io_type)
 {
 	struct write_pointer *wp = __get_wp(conv_ftl, io_type);
-	struct line *curline = get_next_free_line(conv_ftl);
+	enum line_pool_id target_pool = get_io_target_pool(conv_ftl, io_type);
+	struct line *curline = get_next_free_line_by_pool(conv_ftl, target_pool);
 
 	NVMEV_ASSERT(wp);
 	NVMEV_ASSERT(curline);
@@ -332,6 +682,7 @@ static void advance_write_pointer(struct conv_ftl *conv_ftl, uint32_t io_type)
 	struct ssdparams *spp = &conv_ftl->ssd->sp;
 	struct line_mgmt *lm = &conv_ftl->lm;
 	struct write_pointer *wpp = __get_wp(conv_ftl, io_type);
+	enum line_pool_id next_pool;
 
 	cb_clock++;
 
@@ -365,6 +716,7 @@ static void advance_write_pointer(struct conv_ftl *conv_ftl, uint32_t io_type)
 	wpp->pg = 0;
 	/* line is now fully written and closed: stamp its age for Cost-Benefit */
 	wpp->curline->mtime = cb_clock;
+	wpp->curline->close_seq = conv_ftl->slc_rt.line_close_seq++;
 	/* move current line to {victim,full} line list */
 	if (wpp->curline->vpc == spp->pgs_per_line) {
 		/* all pgs are still valid, move to full line list */
@@ -382,7 +734,10 @@ static void advance_write_pointer(struct conv_ftl *conv_ftl, uint32_t io_type)
 	}
 	/* current line is used up, pick another empty line */
 	check_addr(wpp->blk, spp->blks_per_pl);
-	wpp->curline = get_next_free_line(conv_ftl);
+	next_pool = wpp->curline->pool;
+	if (next_pool == LINE_POOL_SLC && conv_ftl->slc_rt.slc_lm.free_line_cnt == 0)
+		foreground_slc_migration(conv_ftl);
+	wpp->curline = get_next_free_line_by_pool(conv_ftl, next_pool);
 	NVMEV_DEBUG_VERBOSE("wpp: got new clean line %d\n", wpp->curline->id);
 
 	wpp->blk = wpp->curline->id;
@@ -462,6 +817,7 @@ static void conv_init_ftl(struct conv_ftl *conv_ftl, struct convparams *cpp, str
 	init_rmap(conv_ftl); // reverse mapping table (?)
 
 	/* initialize all the lines */
+	init_slc_layout_metadata(conv_ftl);
 	init_lines(conv_ftl);
 
 	/* initialize write pointer, this is how we allocate new pages for writes */
@@ -766,64 +1122,6 @@ static uint64_t gc_write_page(struct conv_ftl *conv_ftl, struct ppa *old_ppa)
 	return 0;
 }
 
-static struct line *select_victim_line(struct conv_ftl *conv_ftl, bool force)
-{
-	struct ssdparams *spp = &conv_ftl->ssd->sp;
-	struct line_mgmt *lm = &conv_ftl->lm;
-	struct line *victim_line = NULL;
-
-	victim_line = pqueue_peek(lm->victim_line_pq);
-	if (!victim_line) {
-		return NULL;
-	}
-
-	diag_scan_greedy_vs_cb(lm->victim_line_pq);
-
-	if (!force && (victim_line->vpc > (spp->pgs_per_line / 8))) {
-		return NULL;
-	}
-
-	if (gc_policy == GC_POLICY_RANDOM) {
-		pqueue_t *pq = lm->victim_line_pq;
-		size_t idx = 1 + (get_random_u32() % (pq->size - 1));
-
-		victim_line = pq->d[idx];
-		pqueue_remove(pq, victim_line);
-	} else if (gc_policy == GC_POLICY_COST_BENEFIT) {
-		/* victim_line_get_pri()'s Cost-Benefit score depends on cb_clock, which
-		 * keeps advancing after a line is already sitting in the heap. Heap
-		 * insert/remove only re-sorts the ancestor path of the node actually being
-		 * touched, so two resident lines with different ipc/vpc ratios can silently
-		 * swap their true relative rank purely from time passing, with nothing
-		 * ever telling the heap to re-check them (confirmed by simulating this
-		 * pqueue against this exact formula: a 2-node heap can sit permanently
-		 * mis-ordered, and pqueue_is_valid() goes false, once no further
-		 * insert/remove touches it). So pqueue_peek()/pqueue_pop() can return a
-		 * line that is no longer the actual best-scoring one. Rescan the raw heap
-		 * array for the true current best instead of trusting heap order; O(n) per
-		 * GC call, but GC calls are rare relative to page writes. */
-		pqueue_t *pq = lm->victim_line_pq;
-		size_t i;
-
-		victim_line = pq->d[1];
-		for (i = 2; i < pq->size; i++) {
-			struct line *cand = pq->d[i];
-
-			if (victim_line_get_pri(cand) < victim_line_get_pri(victim_line))
-				victim_line = cand;
-		}
-		pqueue_remove(pq, victim_line);
-	} else {
-		pqueue_pop(lm->victim_line_pq);
-	}
-
-	victim_line->pos = 0;
-	lm->victim_line_cnt--;
-
-	/* victim_line is a danggling node now */
-	return victim_line;
-}
-
 /* here ppa identifies the block we want to clean */
 static void clean_one_block(struct conv_ftl *conv_ftl, struct ppa *ppa)
 {
@@ -907,16 +1205,16 @@ static void mark_line_free(struct conv_ftl *conv_ftl, struct ppa *ppa)
 	/* move this line to free line list */
 	list_add_tail(&line->entry, &lm->free_line_list);
 	lm->free_line_cnt++;
+	inc_pool_free_line_cnt(conv_ftl, line);
 }
 
-static int do_gc(struct conv_ftl *conv_ftl, bool force)
+static int reclaim_one_line(struct conv_ftl *conv_ftl, struct line *victim_line,
+			    enum reclaim_reason reason, bool refill_credit)
 {
-	struct line *victim_line = NULL;
 	struct ssdparams *spp = &conv_ftl->ssd->sp;
 	struct ppa ppa;
 	int flashpg;
 
-	victim_line = select_victim_line(conv_ftl, force);
 	if (!victim_line) {
 		return -1;
 	}
@@ -926,8 +1224,20 @@ static int do_gc(struct conv_ftl *conv_ftl, bool force)
 		    victim_line->ipc, victim_line->vpc, conv_ftl->lm.victim_line_cnt,
 		    conv_ftl->lm.full_line_cnt, conv_ftl->lm.free_line_cnt);
 
-	conv_ftl->wfc.credits_to_refill = victim_line->ipc;
-	gc_valid_page_migrate_cnt += victim_line->vpc;
+	if (reason == RECLAIM_REASON_TLC_GC) {
+		tlc_gc_cnt++;
+		tlc_gc_valid_page_migrate_cnt += victim_line->vpc;
+		/* Keep the legacy counter for existing scripts; it now explicitly
+		 * means TLC GC valid-page copies rather than all migration types. */
+		gc_valid_page_migrate_cnt += victim_line->vpc;
+	} else {
+		slc_migration_cnt++;
+		slc_migration_valid_page_migrate_cnt += victim_line->vpc;
+	}
+
+	if (refill_credit) {
+		conv_ftl->wfc.credits_to_refill = victim_line->ipc;
+	}
 
 	/* copy back valid data */
 	for (flashpg = 0; flashpg < spp->flashpgs_per_blk; flashpg++) {
@@ -972,12 +1282,38 @@ static int do_gc(struct conv_ftl *conv_ftl, bool force)
 	return 0;
 }
 
+static int do_gc(struct conv_ftl *conv_ftl, bool force)
+{
+	struct line *victim_line = select_tlc_gc_victim_line(conv_ftl, force);
+
+	return reclaim_one_line(conv_ftl, victim_line, RECLAIM_REASON_TLC_GC, true);
+}
+
+static int do_slc_migration(struct conv_ftl *conv_ftl)
+{
+	struct line *victim_line;
+
+	if (conv_ftl->slc_rt.tlc_lm.free_line_cnt == 0)
+		do_gc(conv_ftl, true);
+
+	victim_line = select_slc_migration_victim_line(conv_ftl);
+	return reclaim_one_line(conv_ftl, victim_line, RECLAIM_REASON_SLC_MIGRATION, false);
+}
+
 static void foreground_gc(struct conv_ftl *conv_ftl)
 {
 	if (should_gc_high(conv_ftl)) {
 		NVMEV_DEBUG_VERBOSE("should_gc_high passed");
 		/* perform GC here until !should_gc(conv_ftl) */
 		do_gc(conv_ftl, true);
+	}
+}
+
+static void foreground_slc_migration(struct conv_ftl *conv_ftl)
+{
+	while (should_migrate_slc(conv_ftl)) {
+		if (do_slc_migration(conv_ftl) != 0)
+			break;
 	}
 }
 
@@ -1168,8 +1504,10 @@ static bool conv_write(struct nvmev_ns *ns, struct nvmev_request *req, struct nv
 						    spp->pgs_per_oneshotpg * spp->pgsz);
 		}
 
-		consume_write_credit(conv_ftl);
-		check_and_refill_write_credit(conv_ftl);
+		if (!ppa_is_slc(conv_ftl, &ppa)) {
+			consume_write_credit(conv_ftl);
+			check_and_refill_write_credit(conv_ftl);
+		}
 	}
 
 	if ((cmd->rw.control & NVME_RW_FUA) || (spp->write_early_completion == 0)) {

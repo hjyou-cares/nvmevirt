@@ -404,6 +404,12 @@ static int __proc_file_read(struct seq_file *m, void *data)
 			   total_io);
 	} else if (strcmp(filename, "debug") == 0) {
 		seq_printf(m, "GC_VALID_PAGE_MIGRATE_CNT %llu\n", gc_valid_page_migrate_cnt);
+		seq_printf(m, "TLC_GC_CNT %llu\n", tlc_gc_cnt);
+		seq_printf(m, "TLC_GC_VALID_PAGE_MIGRATE_CNT %llu\n",
+			   tlc_gc_valid_page_migrate_cnt);
+		seq_printf(m, "SLC_MIGRATION_CNT %llu\n", slc_migration_cnt);
+		seq_printf(m, "SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT %llu\n",
+			   slc_migration_valid_page_migrate_cnt);
 		seq_printf(m, "DIAG_TOTAL_GC %llu\n", diag_total_gc);
 		seq_printf(m, "DIAG_IDENTITY_DIVERGE %llu\n", diag_identity_diverge);
 		seq_printf(m, "DIAG_SUM_GREEDY_VPC %llu\n", diag_sum_greedy_vpc);
@@ -463,6 +469,10 @@ static ssize_t __proc_file_write(struct file *file, const char __user *buf, size
 		if (!strncmp(input, "reset", 5)) {
 			__walk_conv_blocks(NULL, BLOCK_WALK_RESET);
 			gc_valid_page_migrate_cnt = 0;
+			tlc_gc_cnt = 0;
+			tlc_gc_valid_page_migrate_cnt = 0;
+			slc_migration_cnt = 0;
+			slc_migration_valid_page_migrate_cnt = 0;
 			diag_total_gc = 0;
 			diag_identity_diverge = 0;
 			diag_sum_greedy_vpc = 0;

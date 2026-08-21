@@ -23,6 +23,12 @@
 #define CELL_MODE_TLC 3
 #define CELL_MODE_QLC 4
 
+/* Practice 2 starts by plumbing the config entry first while keeping the
+ * legacy TLC-only behavior intact. The actual SLC/TLC split will begin using
+ * this value in the next steps. */
+#define SLC_CACHE_RATIO_PERCENT (10)
+static_assert(SLC_CACHE_RATIO_PERCENT <= 100);
+
 /* Must select one of INTEL_OPTANE, SAMSUNG_970PRO, or ZNS_PROTOTYPE
  * in Makefile */
 

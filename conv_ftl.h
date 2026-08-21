@@ -9,6 +9,10 @@
 #include "ssd.h"
 
 extern uint64_t gc_valid_page_migrate_cnt;
+extern uint64_t tlc_gc_cnt;
+extern uint64_t tlc_gc_valid_page_migrate_cnt;
+extern uint64_t slc_migration_cnt;
+extern uint64_t slc_migration_valid_page_migrate_cnt;
 
 /* GC victim divergence analysis (2026-07-30): see diag_scan_greedy_vs_cb()
  * in conv_ftl.c. */
@@ -28,6 +32,12 @@ struct convparams {
 	int pba_pcent; /* (physical space / logical space) * 100*/
 };
 
+enum line_pool_id {
+	LINE_POOL_SHARED = 0,
+	LINE_POOL_SLC = 1,
+	LINE_POOL_TLC = 2,
+};
+
 struct line {
 	int id; /* line id, the same as corresponding block id */
 	int ipc; /* invalid page count in this line */
@@ -35,8 +45,12 @@ struct line {
 	struct list_head entry;
 	/* position in the priority queue for victim lines */
 	size_t pos;
+	/* which pool currently owns this line; SHARED keeps the legacy mode */
+	enum line_pool_id pool;
 	/* logical timestamp (cb_clock) when this line was last closed */
 	uint64_t mtime;
+	/* monotonically increasing close order for FIFO-style migration */
+	uint64_t close_seq;
 };
 
 /* wp: record next write addr */
@@ -68,6 +82,23 @@ struct write_flow_control {
 	uint32_t credits_to_refill;
 };
 
+struct slc_cache_layout {
+	uint32_t slc_ratio_percent;
+	uint32_t total_line_cnt;
+	uint32_t slc_line_cnt;
+	uint32_t tlc_line_cnt;
+	uint32_t slc_line_boundary;
+};
+
+struct slc_cache_runtime {
+	struct line_mgmt slc_lm;
+	struct line_mgmt tlc_lm;
+	struct write_pointer slc_wp;
+	struct write_pointer tlc_wp;
+	struct write_pointer tlc_gc_wp;
+	uint64_t line_close_seq;
+};
+
 struct conv_ftl {
 	struct ssd *ssd;
 
@@ -77,6 +108,13 @@ struct conv_ftl {
 	struct write_pointer wp;
 	struct write_pointer gc_wp;
 	struct line_mgmt lm;
+	/*
+	 * Practice 2 is migrating toward separate SLC/TLC managers and write
+	 * pointers. Keep the legacy single-pool fields above alive until the
+	 * actual I/O path switches over in later steps.
+	 */
+	struct slc_cache_layout slc_layout;
+	struct slc_cache_runtime slc_rt;
 	struct write_flow_control wfc;
 };
 

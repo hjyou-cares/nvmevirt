@@ -1,0 +1,759 @@
+# 실습2 PDF 대체 텍스트
+
+다음 내용은 `NVMeVirt과제-SLC_cache 구현.pdf`의 전체 8페이지를 텍스트로 정리한 것이다.
+
+PDF를 직접 읽지 못하더라도 아래 내용을 공식 과제 자료로 취급해라. 단, 아래에서 “명시된 요구사항”과 “그림을 바탕으로 해석한 동작”, “자료만으로 확정할 수 없는 사항”을 구분해서 사용해야 한다.
+
+---
+
+# 1. 문서 기본 정보
+
+문서 제목:
+
+```text
+신입생 트레이닝
+프로그래밍 실습2: NVMeVirt 활용 SLC cache 구현
+```
+
+담당 조교:
+
+```text
+김귀인
+gikim@davinci.snu.ac.kr
+```
+
+소속:
+
+```text
+SNU Computer Architecture & Embedded Systems Lab
+CARES
+```
+
+제출 마감:
+
+```text
+8월 28일까지
+```
+
+제출처:
+
+```text
+gikim@davinci.snu.ac.kr
+```
+
+---
+
+# 2. 실습의 전체 목표
+
+PDF에 명시된 실습 목표는 다음과 같다.
+
+```text
+NVMeVirt에 SLC cache 구현 및
+SLC to TLC migration 시 victim selection 별 성능 평가
+```
+
+즉, 과제는 크게 두 부분으로 나뉜다.
+
+1. NVMeVirt의 Conventional FTL에 SLC cache 구현
+2. SLC cache가 가득 찼을 때 발생하는 SLC→TLC migration의 victim selection 정책을 구현하고 비교
+
+이 과제에서 사용하는 하위 저장 영역은 PDF 기준으로 SLC와 TLC다.
+
+첨부된 참고 논문에는 QLC가 등장하지만, 공식 과제 PDF는 SLC cache와 TLC 영역을 명시한다. 따라서 참고 논문의 QLC 구조를 공식 구현 대상으로 임의 변경하지 마라.
+
+---
+
+# 3. PDF에 기재된 SLC caching 참고자료
+
+PDF에는 다음 두 웹페이지가 SLC caching 참고자료로 적혀 있다.
+
+```text
+https://kr.transcend-info.com/embedded/technology/slc-mode
+```
+
+```text
+https://www.atpinc.com/blog/what-is-SLC-cache-difference-between-Dynamic-Static-SLC-cache
+```
+
+이 자료들은 SLC cache의 개념과 static/dynamic SLC cache 차이를 이해하기 위한 참고자료다.
+
+공식 구현 명세는 PDF 및 skeleton code의 `ssd_config.h`를 우선해야 한다.
+
+---
+
+# 4. 전체 시스템 구조 개요
+
+PDF의 구조 그림은 다음과 같은 계층을 나타낸다.
+
+```text
+Real-world System
+└── Application
+    └── NVMeVirt
+        ├── Write buffer
+        └── Flash
+            ├── SLC lines
+            └── TLC lines
+```
+
+Flash는 channel 0부터 channel 7까지 여러 channel로 구성된 그림으로 표현되어 있다.
+
+각 channel에 존재하는 flash 공간은 위쪽의 SLC line 영역과 아래쪽의 TLC line 영역으로 구분된다.
+
+개념적인 구조는 다음과 같다.
+
+```text
+                  Host Application
+                         │
+                         ▼
+                   Write buffer
+                         │
+                         ▼
+  ┌────────────────────────────────────────────┐
+  │                   Flash                    │
+  │                                            │
+  │  SLC line   SLC line   ...   SLC line     │
+  │ ────────────────────────────────────────── │
+  │  TLC line   TLC line   ...   TLC line     │
+  └────────────────────────────────────────────┘
+```
+
+그림은 하나의 NVMeVirt SSD 안에서 일부 line을 SLC 영역으로, 나머지 line을 TLC 영역으로 관리한다는 의미다.
+
+단, 다음 사항은 그림만으로 확정할 수 없다.
+
+- 같은 물리 block의 mode를 실행 중 SLC/TLC로 전환하는지
+- 초기화할 때 line을 SLC/TLC로 고정 분할하는지
+- SLC 비율을 실행 중 변경해야 하는지
+- SLC와 TLC 영역이 physical address상 정확히 어떻게 나뉘는지
+
+이 내용은 skeleton code와 `ssd_config.h`를 조사한 후 판단해야 한다.
+
+---
+
+# 5. 기본 Write 동작
+
+PDF의 “Write (in SLC)” 그림에서는 application에서 내려온 write가 NVMeVirt의 write buffer를 거쳐 SLC line에 기록된다.
+
+동작을 개념적으로 나타내면 다음과 같다.
+
+```text
+Application write
+        │
+        ▼
+NVMeVirt write buffer
+        │
+        ▼
+SLC write pointer
+        │
+        ▼
+SLC line에 기록
+```
+
+따라서 PDF 그림상 기본 host write의 우선 목적지는 SLC 영역이다.
+
+다만 다음 사항은 PDF에 명시되어 있지 않으므로 추측해서 구현하지 마라.
+
+- 모든 host write를 무조건 SLC에 기록하는지
+- 큰 write 또는 cold write를 TLC로 직접 보내야 하는지
+- SLC cache bypass 조건이 존재하는지
+- write buffer가 실제 코드상 별도 구조로 존재하는지
+- SLC가 부족할 때 현재 요청을 기다리게 하는지 TLC로 직접 보내는지
+
+공식 그림은 기본 write가 SLC로 향한다는 구조만 보여준다. 세부 동작은 skeleton code에서 확인해야 한다.
+
+---
+
+# 6. SLC→TLC Migration 동작
+
+PDF에는 다음 문구가 명시되어 있다.
+
+```text
+SLC가 꽉 찬 경우 TLC로 data transfer
+```
+
+그림에서는 SLC line 내부에 valid page와 invalid page가 섞여 있다.
+
+- valid page: 유효한 최신 데이터
+- invalid page: overwrite 등으로 더 이상 최신 데이터가 아닌 페이지
+
+SLC 공간이 가득 차면 SLC victim을 선택하고, 해당 victim에 남은 valid data를 TLC 영역으로 이동시키는 것으로 표현되어 있다.
+
+개념적인 동작은 다음과 같다.
+
+```text
+SLC free space 부족
+        │
+        ▼
+SLC migration victim 선택
+        │
+        ▼
+victim의 valid data 판별
+        │
+        ▼
+valid data를 TLC에 기록
+        │
+        ▼
+공통 mapping table을 새 TLC 위치로 갱신
+        │
+        ▼
+SLC victim erase/reclaim
+        │
+        ▼
+SLC free line으로 반환
+```
+
+중요한 구분:
+
+```text
+SLC→TLC migration
+```
+
+은 SLC cache 공간을 회수하기 위한 동작이다.
+
+반면:
+
+```text
+TLC→TLC GC
+```
+
+는 TLC 내부에서 invalid page가 포함된 공간을 회수하기 위한 기존 garbage collection이다.
+
+두 동작은 목적과 victim 후보가 다르므로 별도 경로와 별도 통계로 관리해야 한다.
+
+---
+
+# 7. Read 동작
+
+PDF의 “Read (SLC or TLC)” 그림은 read 대상 데이터가 SLC 또는 TLC 어느 쪽에든 존재할 수 있음을 나타낸다.
+
+개념적인 동작은 다음과 같다.
+
+```text
+Host read
+    │
+    ▼
+공통 logical-to-physical mapping table 조회
+    │
+    ├── 최신 physical page가 SLC에 있음 → SLC read
+    │
+    └── 최신 physical page가 TLC에 있음 → TLC read
+```
+
+이 구조를 위해 PDF는 SLC와 TLC의 mapping을 따로 만들지 말고 하나로 관리하라고 요구한다.
+
+migration 후에는 동일 LBA의 mapping이 기존 SLC 위치가 아니라 새 TLC 위치를 가리켜야 한다.
+
+이 과정에서는 다음 위험을 검토해야 한다.
+
+- TLC write 완료 전에 mapping을 먼저 바꾸는 문제
+- migration 도중 같은 LBA가 host에 의해 다시 write되는 문제
+- 최신 host write를 오래된 migration copy가 덮는 문제
+- 이전 SLC page invalidation 순서
+- mapping update와 page status update의 원자성 또는 ordering
+
+PDF에는 이러한 동시성 처리 방법이 적혀 있지 않으므로 현재 NVMeVirt의 실행 모델과 locking을 확인한 뒤 설계해야 한다.
+
+---
+
+# 8. TLC 내부 Garbage Collection
+
+PDF의 “GC (TLC to TLC)” 그림은 TLC line에 valid page와 invalid page가 섞인 경우를 보여준다.
+
+TLC GC는 다음과 같은 기존 Conventional FTL GC 동작으로 해석할 수 있다.
+
+```text
+TLC free space 부족
+        │
+        ▼
+TLC victim 선택
+        │
+        ▼
+victim의 valid data를 다른 TLC 위치로 복사
+        │
+        ▼
+mapping 갱신
+        │
+        ▼
+victim erase 및 TLC free line 반환
+```
+
+실습1에서 구현한 TLC GC victim policy와 실습2의 SLC migration victim policy를 혼동하지 마라.
+
+다음처럼 구분해야 한다.
+
+```text
+TLC GC victim policy
+- 대상: TLC victim lines
+- 목적: TLC 공간 회수
+- 이동: TLC → TLC
+
+SLC migration victim policy
+- 대상: SLC victim lines
+- 목적: SLC cache 공간 회수
+- 이동: SLC → TLC
+```
+
+실습1의 정책 코드를 재사용할 수는 있지만, 대상 자료구조와 의미가 맞는지 먼저 검증해야 한다.
+
+---
+
+# 9. 실습 1: SLC Cache 구현 및 비교
+
+PDF에서는 실습2 전체 과제의 첫 번째 구현 항목을 다음과 같이 표현한다.
+
+```text
+실습 1: SLC cache 구현
+```
+
+요구사항:
+
+```text
+NVMeVirt에 제공되어 있는 Conventional FTL에
+SLC cache를 구현 및 비교
+```
+
+정상 동작 확인 방법:
+
+```text
+SLC 크기를 고려하여 벤치마크를 수행
+```
+
+확인해야 할 항목:
+
+1. SLC에만 read/write가 수행되는지
+2. SLC가 차서 TLC에 read/write가 수행되는지
+
+이 문구는 다음 두 단계의 테스트가 필요하다는 뜻으로 해석할 수 있다.
+
+## 테스트 A: SLC 용량 이내
+
+SLC cache보다 작은 workload를 실행한다.
+
+기대 관찰:
+
+- host write가 SLC에서 처리
+- read 대상도 SLC에 존재
+- SLC→TLC migration이 발생하지 않거나 아직 필요하지 않음
+
+## 테스트 B: SLC 용량 초과
+
+SLC cache를 채우고 초과할 만큼 충분한 write를 실행한다.
+
+기대 관찰:
+
+- SLC free space가 부족해짐
+- SLC→TLC migration 발생
+- 일부 최신 데이터의 mapping이 TLC를 가리킴
+- TLC에 있는 데이터도 정상 read 가능
+- 계속되는 write가 정상 처리됨
+
+PDF의 “SLC가 차서 TLC에 read/write가 수행되는지” 문구만으로 다음 중 어느 의미인지 완전히 확정할 수는 없다.
+
+- migration을 통해 TLC write가 수행되는 것
+- SLC full 상황에서 host write가 TLC로 직접 우회하는 것
+- 두 동작을 모두 요구하는 것
+
+공식 동작 그림은 valid data migration을 명확히 나타내므로 migration은 필수다. TLC direct host write 여부는 skeleton code 또는 조교 확인이 필요하다.
+
+---
+
+# 10. 기존 NVMeVirt와의 성능 비교
+
+PDF는 SLC cache 구현 후 기존 NVMeVirt와 성능을 비교하도록 요구한다.
+
+비교 대상은 최소한 다음과 같이 설정한다.
+
+```text
+Baseline:
+기존 Conventional FTL, SLC cache 없음
+
+Experiment:
+SLC cache가 구현된 Conventional FTL
+```
+
+벤치마크 프로그램 예시:
+
+- Filebench
+- FIO
+
+공식 평가 요소:
+
+- Throughput
+- Latency
+
+PDF에는 다음 세부 조건은 명시되어 있지 않다.
+
+- 평균 latency만 사용할지
+- p95, p99 또는 p99.9를 사용할지
+- read latency와 write latency를 분리할지
+- benchmark workload 종류
+- 반복 측정 횟수
+- SLC 비율별 비교 필요 여부
+
+따라서 재현 가능한 실험을 위해 다음을 권장하되 공식 요구사항이라고 표현하지 마라.
+
+- write throughput
+- write average latency
+- write p99 latency
+- 각 조건 최소 3회 반복
+- 평균과 표준편차
+- 동일 workload와 동일 초기 상태 사용
+- raw fio JSON 보존
+- SLC cache보다 작은 burst workload
+- SLC migration을 반복적으로 유발하는 sustained workload
+
+---
+
+# 11. 실습 2: Migration Victim Selection 구현 및 비교
+
+PDF에 명시된 migration victim selection 정책은 다음 네 가지다.
+
+1. Greedy baseline
+2. Random
+3. FIFO
+4. Cost-Benefit
+
+각 정책을 별도로 구현하고 동일 조건에서 비교해야 한다.
+
+공식 평가 방법:
+
+- 각 policy마다 같은 benchmark 실행
+- Throughput 측정
+- Latency 측정
+- Filebench 또는 FIO 사용
+
+## 정책의 일반적인 의미
+
+다음은 이름을 바탕으로 한 일반적인 구현 후보일 뿐이다. skeleton code 또는 조교 자료에 별도 정의가 있다면 그것이 우선이다.
+
+### Greedy baseline
+
+SLC victim 후보 중 valid page 수가 가장 적은 line을 선택하는 방식으로 해석할 수 있다.
+
+목표:
+
+```text
+현재 한 번의 migration에서 TLC로 옮겨야 하는 data 최소화
+```
+
+### Random
+
+현재 migration 가능한 SLC victim 후보 중 하나를 무작위로 선택하는 방식으로 해석할 수 있다.
+
+주의:
+
+- 매번 달라지는 random 값을 heap priority로 사용하면 heap invariant가 깨질 수 있다.
+- 후보 배열 또는 queue에서 유효한 후보를 균등하게 고른 뒤 해당 항목을 제거하는 방식이 안전할 수 있다.
+- 실제 자료구조를 확인한 후 구현해야 한다.
+
+### FIFO
+
+가장 먼저 닫혔거나 victim 후보가 된 SLC line을 먼저 선택하는 방식으로 해석할 수 있다.
+
+필요할 수 있는 metadata:
+
+- line close sequence
+- victim queue insertion order
+- 결정론적 logical timestamp
+
+wall-clock 시간보다 결정론적인 sequence counter가 테스트 재현성에 유리할 수 있다.
+
+### Cost-Benefit
+
+유효 페이지 비율과 line의 age를 함께 고려하는 정책으로 해석할 수 있다.
+
+그러나 이 PDF에는 정확한 Cost-Benefit 계산식과 age 정의가 적혀 있지 않다.
+
+따라서 실습1의 식을 자동으로 복사하지 말고 다음을 확인해야 한다.
+
+- skeleton code의 주석
+- 추가 과제 자료
+- `Note.md`
+- 담당 조교가 제공한 식
+- 고전 Cost-Benefit GC 정의
+
+정확한 식이 없다면 구현 전에 사용자에게 알리고 조교 확인이 필요한 질문으로 분류한다.
+
+동적 age로 점수가 계속 변한다면 heap에 오래 저장된 priority가 stale해질 수 있다. 이 경우 victim 선택 시 모든 현재 후보를 다시 계산하는 방식 등을 검토해야 한다.
+
+---
+
+# 12. 전체 시스템 구현 유의사항
+
+PDF 마지막 페이지에 명시된 가장 중요한 구현 조건은 다음 네 가지다.
+
+## 요구사항 1: Config로 SLC 비율 설정
+
+원문:
+
+```text
+Config로 SLC 비율을 dynamic하게 설정 가능하게 구현
+```
+
+의미:
+
+- SLC 영역의 크기를 고정 숫자로 코드 여러 곳에 하드코딩하면 안 된다.
+- config 값을 바꾸어 SLC/TLC 용량 비율을 설정할 수 있어야 한다.
+- skeleton code의 `ssd_config.h` 설정을 사용해야 한다.
+
+단, “dynamic”이 실행 도중 비율 변경을 뜻하는지, module 초기화 전에 config로 여러 비율을 선택할 수 있다는 뜻인지는 PDF만으로 확정할 수 없다.
+
+`ssd_config.h`와 skeleton code를 조사한 뒤 판단해야 한다.
+
+## 요구사항 2: Line Manager 2개
+
+원문:
+
+```text
+Line manager는 2개로 관리
+```
+
+필요한 개념 구조:
+
+```text
+SLC line manager
+├── SLC free lines
+├── SLC active/write line
+├── SLC full lines
+└── SLC migration victim candidates
+
+TLC line manager
+├── TLC free lines
+├── TLC active/write line
+├── TLC full lines
+└── TLC GC victim candidates
+```
+
+SLC와 TLC가 각각 독립적으로 line을 할당하고 회수해야 한다.
+
+검증해야 할 invariant:
+
+- 하나의 line이 동시에 SLC manager와 TLC manager에 속하지 않음
+- 전체 line 수 = SLC 소유 line 수 + TLC 소유 line 수
+- 각 manager 내부의 free/full/victim count가 일관됨
+- SLC reclaimed line은 SLC free list로 반환
+- TLC reclaimed line은 TLC free list로 반환
+- SLC migration destination은 TLC manager에서 할당
+
+## 요구사항 3: Mapping Table 하나
+
+원문:
+
+```text
+Mapping은 하나로 관리
+```
+
+별도의 SLC mapping table과 TLC mapping table을 만들면 안 된다.
+
+개념 구조:
+
+```text
+LBA
+ │
+ ▼
+공통 mapping table
+ │
+ ├── SLC physical page
+ └── TLC physical page
+```
+
+mapping entry 또는 PPA를 통해 최신 데이터의 실제 위치를 알아야 한다.
+
+migration이 발생하면 동일한 mapping entry가 다음처럼 변경된다.
+
+```text
+migration 전:
+LBA → SLC physical page
+
+migration 후:
+LBA → TLC physical page
+```
+
+## 요구사항 4: 서로 다른 Oneshot Page Size
+
+원문:
+
+```text
+SLC TLC는 oneshot page size가 다름
+```
+
+PDF 그림에는 flash write unit 옆에 `16KB` 표기가 있지만, 그림만으로 SLC와 TLC의 정확한 oneshot page 수 또는 byte 크기를 확정해서는 안 된다.
+
+반드시 skeleton code의 `ssd_config.h` 값을 사용해야 한다.
+
+확인해야 할 사항:
+
+- host logical page size
+- NAND page size
+- SLC oneshot page 개수와 byte 크기
+- TLC oneshot page 개수와 byte 크기
+- write pointer가 한 번에 전진하는 단위
+- channel/lun parallel write 단위
+- page index와 PPA 계산
+- migration 시 SLC read 단위와 TLC program 단위 차이
+- 부분적으로 채워진 oneshot unit 처리
+
+PDF 마지막 문구:
+
+```text
+Skeleton code로 제공되는 ssd_config.h 설정을 사용할 것
+```
+
+따라서 정확한 상수는 추측하거나 논문 표에서 가져오지 말고 현재 저장소의 `ssd_config.h`를 확인해야 한다.
+
+---
+
+# 13. 구현 시 반드시 분리해야 하는 상태
+
+실습1 TLC GC와 실습2 SLC migration을 함께 유지한다면 상태 이름을 명확하게 분리해야 한다.
+
+예:
+
+```text
+tlc_gc_policy
+slc_migration_policy
+```
+
+피해야 할 구조:
+
+```text
+gc_policy 하나가 TLC GC와 SLC migration을 모두 의미
+```
+
+마찬가지로 통계도 구분해야 한다.
+
+```text
+SLC→TLC migration count
+SLC→TLC migrated valid pages
+
+TLC→TLC GC count
+TLC→TLC GC migrated valid pages
+```
+
+SLC migration과 TLC GC가 같은 helper를 일부 공유하더라도 정책 선택, victim queue, line manager와 counter의 의미는 섞이지 않아야 한다.
+
+---
+
+# 14. 권장 관측 항목
+
+PDF가 공식적으로 요구하는 성능 지표는 throughput과 latency다.
+
+하지만 정상 동작과 결과 원인을 검증하려면 다음 counter를 추가로 고려한다.
+
+- host total read/write count
+- host total read/write bytes
+- SLC host write count/bytes
+- TLC host write count/bytes
+- SLC read count/bytes
+- TLC read count/bytes
+- SLC→TLC migration count
+- SLC→TLC migrated valid page count/bytes
+- SLC line reclaim count
+- TLC GC count
+- TLC GC migrated valid page count/bytes
+- 현재 SLC free line 수
+- 최소 SLC free line 수
+- 정책별 victim selection count
+
+이 보조 counter들은 공식 제출 요구사항에 명시된 것은 아니다. 구현 검증과 결과 분석을 위한 권장 항목이다.
+
+계측 자체가 성능을 크게 왜곡하지 않도록 hot path에서 과도한 출력은 피해야 한다.
+
+---
+
+# 15. 제출 요구사항
+
+PDF에 명시된 제출물:
+
+```text
+구현한 코드
+- 새롭게 구현한 파일만
+```
+
+```text
+결과 보고서
+- 측정 결과 그래프
+- 결과에 대한 간단한 분석
+```
+
+제출 기한과 이메일:
+
+```text
+8월 28일까지
+gikim@davinci.snu.ac.kr
+```
+
+“새롭게 구현한 파일만”이라는 문구가 다음 중 정확히 무엇을 뜻하는지는 확인이 필요하다.
+
+- 수정한 전체 소스 파일 제출
+- diff/patch 제출
+- 새로 생성한 파일만 제출
+- 수정·추가한 모든 파일 제출
+
+제출 직전에 담당 조교에게 제출 형식과 압축 구조를 확인하는 것이 안전하다.
+
+---
+
+# 16. PDF만으로 확정할 수 없는 질문
+
+다음은 PDF에 정확한 답이 없으므로 코드에서 확인하거나 조교에게 질문해야 한다.
+
+1. SLC 비율의 기본값, 단위와 허용 범위
+2. SLC 비율 0% 또는 100% 지원 여부
+3. “dynamic”이 실행 중 비율 변경을 포함하는지
+4. SLC/TLC의 정확한 oneshot page size
+5. SLC와 TLC line의 정확한 물리 구성
+6. SLC full 또는 migration trigger의 정확한 임계값
+7. migration이 foreground인지 background인지
+8. SLC→SLC GC가 필요한지
+9. SLC full 시 host write의 TLC direct write 허용 여부
+10. Greedy의 정확한 기준
+11. FIFO의 기준 시점
+12. Cost-Benefit의 정확한 계산식과 age 정의
+13. tail latency percentile
+14. 필수 benchmark 종류와 workload
+15. 정책별 반복 횟수
+16. SLC 비율별 비교가 제출 필수인지
+17. 제출 파일 형식
+
+이 질문들을 임의로 정하지 말고, 먼저 skeleton code와 `ssd_config.h`에서 답을 찾아라. 여전히 불분명한 항목만 사용자에게 보고해라.
+
+---
+
+# 17. Codex가 지금 해야 할 작업
+
+위 내용은 PDF를 직접 읽지 못하는 상황을 위한 공식 과제 자료의 대체 텍스트다.
+
+지금은 코드 수정부터 시작하지 마라.
+
+다음 순서로 진행해라.
+
+1. 현재 저장소의 `ssd_config.h`와 SLC/TLC 관련 skeleton을 조사한다.
+2. 위 명시 요구사항이 코드 어디에 반영되어 있는지 찾는다.
+3. 이미 구현된 부분, skeleton만 있는 부분, 새로 구현해야 하는 부분을 구분한다.
+4. 실습1 코드에서 재사용할 부분과 충돌하는 부분을 구분한다.
+5. PDF만으로 확정할 수 없는 질문 중 코드에서도 답을 찾지 못한 항목을 정리한다.
+6. SLC cache 구현의 단계별 계획을 제시한다.
+7. 사용자가 조사 결과와 설계를 승인하기 전에는 코드를 수정하지 않는다.
+
+분석 결과는 다음 표로 작성한다.
+
+| 과제 요구사항 | 관련 파일·구조체·함수 | 현재 구현 상태 | 필요한 변경 | 불확실한 부분 |
+|---|---|---|---|---|
+| Config 기반 SLC 비율 | | | | |
+| SLC line manager | | | | |
+| TLC line manager | | | | |
+| 단일 mapping table | | | | |
+| SLC oneshot page | | | | |
+| TLC oneshot page | | | | |
+| SLC write | | | | |
+| SLC/TLC read | | | | |
+| SLC→TLC migration | | | | |
+| TLC→TLC GC | | | | |
+| Greedy migration policy | | | | |
+| Random migration policy | | | | |
+| FIFO migration policy | | | | |
+| Cost-Benefit migration policy | | | | |
+| throughput/latency 측정 | | | | |
+
+확인된 사실, 코드에 근거한 추정, 사용자 또는 조교 확인이 필요한 내용을 반드시 구분해라.
