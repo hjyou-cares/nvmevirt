@@ -15,6 +15,7 @@
 - 현재 작업 branch: `practice2-slc-cache`
 - 최신 작업 commit은 `8aa39ca` (`Add SLC migration scaffolding and session docs`)다.
 - 서버 `~/nvmevirt`도 `practice2-slc-cache`의 `8aa39ca`까지 동기화됐다.
+- 현재 worktree에는 로컬 실행용 스크립트 `scripts/run_local_slc_policy_compare.sh`와 로컬 실험 결과 디렉터리가 추가돼 있다.
 
 ## 현재까지 구현된 흐름
 
@@ -28,6 +29,8 @@
 - SLC migration victim policy 4종(Greedy/Random/FIFO/Cost-Benefit) 분기가 연결됐다.
 - `/proc/nvmev/debug`에 TLC GC 통계와 SLC migration 통계가 분리돼 노출된다.
 - 로컬 VM smoke test에서 SLC write, SLC to TLC migration, TLC GC가 실제로 발생하는 것까지 확인했다.
+- 2026-08-23 로컬 fresh reload 4정책 비교(`results/local_20260823_212734_slc_policy_compare`)까지 수행했다.
+- 로컬 재실행용 `scripts/run_local_slc_policy_compare.sh`가 추가됐다.
 
 ## 아직 안 된 것
 
@@ -39,21 +42,21 @@
 
 ## 다음 우선순위
 
-1. 서버 환경에서 `slc_migration_policy=0/1/2/3`를 fresh reload 조건으로 비교한다.
-2. `scripts/run_experiment.sh`가 `slc_migration_policy`를 받도록 정리한다.
-3. `fio verify` 또는 read-back으로 데이터 정합성을 검증한다.
+1. `scripts/run_experiment.sh`가 `slc_migration_policy`를 받도록 정리한다.
+2. `fio verify` 또는 read-back으로 데이터 정합성을 검증한다.
+3. 현재 로컬 workload에서 `0/2/3`이 수렴하는 이유를 더 드러내는 workload를 찾는다.
 4. SLC/TLC별 timing과 oneshot 차이를 모델에 반영한다.
 5. read/write path가 pool별 timing을 실제로 타도록 구조를 정리한다.
 
 ## 작업 시 주의사항
 
 - 시작할 때 긴 조사 문서를 전부 다시 읽지 않는다.
-- 다음 세션은 서버 SSH 접속 후 `~/nvmevirt`에서 시작하는 것을 기본 전제로 한다.
+- 다음 세션은 우선 로컬 `~/nvmevirt`에서 시작한다.
 - 현재 흐름 확인은 `git status`, `git diff --stat`, `docs/CURRENT_TASK.md`로 끝낸다.
 - 과제 공식 문구가 다시 필요할 때만 `docs/PRACTICE2_AGENTS`를 읽는다.
 - 실습1의 TLC GC 정책과 실습2의 SLC migration 정책을 같은 문제로 취급하지 않는다.
 - 정책 비교에서는 `echo reset`만 쓰지 말고 `umount -> rmmod -> insmod -> mkfs -> mount`로 fresh reload 한다.
-- 로컬 VM은 용량이 작아 smoke test 이상 비교 실험에는 부적합할 수 있다.
+- 로컬 VM에서는 서버용 `600M x 250`를 그대로 쓰지 말고, 현재 기준 `smoke=128M x 20`, `compare=600M x 10`을 우선 사용한다.
 - 기존 사용자 변경은 절대 되돌리지 않는다.
 
 ## 필요할 때만 보는 문서

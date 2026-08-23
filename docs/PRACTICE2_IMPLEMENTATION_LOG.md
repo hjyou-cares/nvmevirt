@@ -349,3 +349,46 @@
 
 - 다음 세션은 서버에서 시작하되, 실험 전에 `make`와 block device 경로(`/dev/nvme1n1`)를 다시 한 번 확인해야 한다.
 - 아직 정책 비교 실험과 데이터 정합성 검증은 수행하지 않았다.
+
+## 2026-08-23: 로컬 4정책 비교 및 로컬 실행 스크립트 추가
+
+### 확인한 내용
+
+- 서버 쪽 이슈 때문에 오늘은 로컬 VM 기준으로 이어서 진행했다.
+- 기존 서버용 workload(`600M x 250`)를 로컬에 그대로 쓰면 지나치게 오래 걸릴 수 있어, 로컬용 기준을 따로 두는 편이 맞다.
+- 사용자 로컬 실행 결과 `results/local_20260823_212734_slc_policy_compare/`에 fresh reload 기반 4정책 비교 결과가 남았다.
+- 이 비교에서 정책 매핑은 현재 코드 기준으로 `0=Greedy`, `1=Random`, `2=FIFO`, `3=Cost-Benefit`이다.
+
+### 변경한 내용
+
+- [scripts/run_local_slc_policy_compare.sh](/home/hjyu216/nvmevirt/scripts/run_local_slc_policy_compare.sh)를 새로 추가했다.
+  - `smoke` 모드: 기본 `128M x 20`
+  - `compare` 모드: 기본 `600M x 10`
+  - `gc_policy=0`을 고정하고 `slc_migration_policy`만 바꾸도록 했다.
+  - 모듈 리로드는 `umount -> rmmod -> insmod -> mkfs -> mount` 순서를 자동화했다.
+  - device 대기는 `udevadm settle`을 우선 사용하고, 최종적으로 block device 존재만 확인한다.
+- [docs/CURRENT_TASK.md](/home/hjyu216/nvmevirt/docs/CURRENT_TASK.md)와 [docs/CODEX_BOOTSTRAP.md](/home/hjyu216/nvmevirt/docs/CODEX_BOOTSTRAP.md)를 오늘 기준 로컬 진행 상태에 맞게 갱신했다.
+
+### 변경 이유
+
+- 기존 [scripts/run_experiment.sh](/home/hjyu216/nvmevirt/scripts/run_experiment.sh)는 아직 `gc_policy` 중심 서버 실험 스크립트라, 오늘 필요한 로컬 `slc_migration_policy` 비교와 바로 맞지 않았다.
+- 매번 수동으로 길게 입력한 로컬 명령을 재사용 가능한 형태로 묶어 두면 다음 세션 진입 비용이 줄어든다.
+- 인계 문서가 계속 서버 우선 상태로 남아 있으면 다음 세션이 현재 실제 흐름과 어긋날 수 있다.
+
+### 검증 결과
+
+- 사용자는 로컬에서 smoke test와 4정책 비교를 직접 완료했다.
+- `results/local_20260823_212734_slc_policy_compare/` 기준:
+  - Greedy(`0`): `TLC_GC_CNT 15540`, `SLC_MIGRATION_CNT 45060`, `SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT 1440939`, fio runtime 약 `292211 ms`
+  - Random(`1`): `TLC_GC_CNT 5835`, `SLC_MIGRATION_CNT 45018`, `SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT 1130392`, fio runtime 약 `73571 ms`
+  - FIFO(`2`): `TLC_GC_CNT 15527`, `SLC_MIGRATION_CNT 45020`, `SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT 1440508`, fio runtime 약 `94600 ms`
+  - Cost-Benefit(`3`): `TLC_GC_CNT 15526`, `SLC_MIGRATION_CNT 45030`, `SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT 1440485`, fio runtime 약 `100708 ms`
+- Random만 다른 3개와 꽤 다르고, Greedy/FIFO/Cost-Benefit은 현재 로컬 workload에서 거의 같은 범주로 묶였다.
+- `DIAG_*` 값은 네 정책 모두 `0`이라 TLC GC Greedy vs Cost-Benefit 차이는 이 로컬 조건에선 드러나지 않았다.
+- `bash -n scripts/run_local_slc_policy_compare.sh` 문법 확인은 통과했다.
+
+### 남은 위험
+
+- smoke test는 별도 저장 파일이 남지 않아, 자세한 수치는 4정책 비교 결과 쪽이 사실상 오늘의 기준 기록이다.
+- 현재 로컬 workload(`600M x 10`)에서는 `0/2/3` 차이가 충분히 드러나지 않아, 더 적절한 workload 탐색이 필요하다.
+- 데이터 정합성 검증(`fio verify` 또는 read-back)은 아직 추가되지 않았다.

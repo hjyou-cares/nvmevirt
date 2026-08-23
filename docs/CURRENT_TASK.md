@@ -3,17 +3,17 @@
 ## 현재 흐름
 
 - 실습2 WIP는 commit `8aa39ca`로 로컬/원격에 반영됐다.
-- 핵심 변경 파일은 `conv_ftl.c`, `conv_ftl.h`, `main.c`, `ssd_config.h`다.
+- 핵심 변경 파일은 `conv_ftl.c`, `conv_ftl.h`, `main.c`, `ssd_config.h`이며, 로컬 실행용 스크립트 `scripts/run_local_slc_policy_compare.sh`가 추가됐다.
 - 현재 코드는 SLC/TLC pool metadata, pool-aware write path, SLC migration 첫 연결, migration/TLC GC counter 분리, migration policy 분리까지 들어간 상태다.
 - 현재 worktree 기준 `SLC_CACHE_RATIO_PERCENT`는 `10`이라 SLC path가 컴파일 시 기본 활성이다.
-- 로컬 VM smoke test에서는 SLC write, SLC to TLC migration, TLC GC가 모두 실제로 발생하는 것까지 확인했다.
-- 서버 저장소 `~/nvmevirt`도 `practice2-slc-cache` 브랜치의 `8aa39ca`까지 동기화된 상태다.
+- 로컬 VM smoke test와 fresh reload 기반 4정책 비교에서 SLC write, SLC to TLC migration, TLC GC가 모두 실제로 발생하는 것까지 확인했다.
+- 서버 저장소 `~/nvmevirt`도 `practice2-slc-cache` 브랜치의 `8aa39ca`까지 동기화돼 있지만, 현재는 서버 이슈 때문에 로컬 우선으로 진행한다.
 
 ## 다음에 바로 할 일
 
-1. 서버 환경에서 `slc_migration_policy=0/1/2/3`를 fresh reload 조건으로 반복 실행한다.
+1. 오늘 추가한 `scripts/run_local_slc_policy_compare.sh`로 로컬 재실행이 재현되는지 필요 시 다시 확인한다.
 2. `scripts/run_experiment.sh`가 `slc_migration_policy`까지 받도록 정리한다.
-3. policy별 victim selection과 migration/TLC GC counter 차이가 실제로 드러나는지 확인한다.
+3. policy별 victim selection과 migration/TLC GC counter 차이가 더 크게 드러나는 workload를 찾거나 조정한다.
 4. `fio verify` 또는 read-back 기반 데이터 정합성 검증을 추가한다.
 
 ## 미구현 핵심 항목
@@ -35,22 +35,43 @@
 
 ## 오늘 확인한 결과
 
-- 로컬 환경에서는 `make` 바이너리가 없어 이 세션 셸에서 직접 빌드 검증은 못 했다.
-- 사용자 VM smoke test 결과 `/proc/nvmev/debug`에서 다음을 확인했다.
-  - `SLC_MIGRATION_CNT 45059`
-  - `SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT 1397376`
-  - `TLC_GC_CNT 15253`
-  - `TLC_GC_VALID_PAGE_MIGRATE_CNT 0`
-- 위 결과는 현재 코드에서 SLC migration과 TLC GC 경로가 실제로 동작함을 보여준다.
-- 같은 smoke workload에서는 `DIAG_*` 값이 모두 `0`이라 Greedy와 Cost-Benefit 차이는 아직 드러나지 않았다.
-- 로컬 변경은 commit `8aa39ca` (`Add SLC migration scaffolding and session docs`)로 정리했고, 원격 `origin/practice2-slc-cache`에도 push 완료했다.
-- 서버에서는 `main`이 아니라 `practice2-slc-cache`로 checkout 후 `git pull origin practice2-slc-cache`까지 완료했고, `git log`에서 `8aa39ca`를 확인했다.
+- 로컬 environment에서 `make`는 사용 가능했고, 사용자는 로컬 VM에서 smoke test와 fresh reload 기반 4정책 비교를 직접 완료했다.
+- smoke test는 저장 파일이 남진 않았지만, 기존과 같은 방향으로 SLC migration/TLC GC가 실제로 도는 것을 확인했다.
+- 4정책 비교 결과는 `results/local_20260823_212734_slc_policy_compare/`에 저장됐다.
+  - policy `0` Greedy:
+    - `TLC_GC_CNT 15540`
+    - `TLC_GC_VALID_PAGE_MIGRATE_CNT 0`
+    - `SLC_MIGRATION_CNT 45060`
+    - `SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT 1440939`
+    - fio runtime 약 `292211 ms`
+  - policy `1` Random:
+    - `TLC_GC_CNT 5835`
+    - `TLC_GC_VALID_PAGE_MIGRATE_CNT 0`
+    - `SLC_MIGRATION_CNT 45018`
+    - `SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT 1130392`
+    - fio runtime 약 `73571 ms`
+  - policy `2` FIFO:
+    - `TLC_GC_CNT 15527`
+    - `TLC_GC_VALID_PAGE_MIGRATE_CNT 0`
+    - `SLC_MIGRATION_CNT 45020`
+    - `SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT 1440508`
+    - fio runtime 약 `94600 ms`
+  - policy `3` Cost-Benefit:
+    - `TLC_GC_CNT 15526`
+    - `TLC_GC_VALID_PAGE_MIGRATE_CNT 0`
+    - `SLC_MIGRATION_CNT 45030`
+    - `SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT 1440485`
+    - fio runtime 약 `100708 ms`
+- 위 결과에서 Random(`1`)만 다른 3개와 꽤 다르고, Greedy/FIFO/Cost-Benefit(`0/2/3`)은 현재 로컬 workload(`600M x 10`)에서 거의 같은 범주로 묶였다.
+- 같은 비교에서 `DIAG_*` 값은 네 정책 모두 `0`이라 TLC GC Greedy vs Cost-Benefit 차이는 이 로컬 조건에서 드러나지 않았다.
+- 서버용 `600M x 250` workload를 로컬에 그대로 쓰면 과도하게 오래 걸릴 수 있어, 로컬 기준은 `smoke=128M x 20`, `compare=600M x 10`으로 별도 분리했다.
+- 로컬 재실행 편의를 위해 `scripts/run_local_slc_policy_compare.sh`를 추가했다.
 
 ## 다음 세션 시작점
 
-- 다음 세션은 서버에 SSH 접속한 뒤 `~/nvmevirt`에서 시작한다.
-- 서버 시작 확인 순서는 `git branch --show-current`, `git status --short`, `make` 정도면 충분하다.
-- 목표는 서버에서 `slc_migration_policy=0/1/2/3` 비교와 실험 스크립트 정리다.
+- 다음 세션은 로컬 `~/nvmevirt`에서 시작하는 것을 우선으로 한다.
+- 시작 확인 순서는 `git status --short`, `ls results/local_* | tail`, `sed -n '1,220p' scripts/run_local_slc_policy_compare.sh` 정도면 충분하다.
+- 목표는 로컬 결과를 바탕으로 `scripts/run_experiment.sh`의 `slc_migration_policy` 지원과 데이터 정합성 검증을 정리하는 것이다.
 
 ## 참고 문서
 
