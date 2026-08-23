@@ -1,6 +1,7 @@
 #!/bin/bash
-# 사용법: ./scripts/run_experiment.sh <policy: 0|1|2> <label> [workload: uniform|hotcold]
-#   policy:   0=Greedy, 1=Random, 2=Cost-Benefit
+# 사용법: ./scripts/run_experiment.sh <policy: 0|1|2|3> <label> [workload: uniform|hotcold]
+#   policy:   SLC migration policy
+#             0=Greedy, 1=Random, 2=FIFO, 3=Cost-Benefit
 #   label:    결과 폴더 구분용 자유 문자열 (예: randwrite6g, hotcold1)
 #   workload: uniform(기본값, 균등 랜덤쓰기 6G) | hotcold(콜드 500M 1회 + 핫 50M x120루프)
 #
@@ -11,18 +12,21 @@
 #   MEMMAP_SIZE   기본값 1G (로컬 VM). 서버는 48G.
 #   NVME_CPUS     기본값 2,3 (로컬 VM). 서버는 7,8.
 #   MOUNT_DIR     기본값 $HOME/nvme_mount
+#   TLC_GC_POLICY 기본값 0. 실습2에서는 TLC GC와 SLC migration 의미가 분리됐으므로
+#                 이 스크립트는 TLC GC를 고정하고 slc_migration_policy만 비교한다.
 #
 # 예) 서버에서: NVME_DEV=/dev/nvme1n1 MEMMAP_START=16G MEMMAP_SIZE=48G NVME_CPUS=7,8 \
-#              ./scripts/run_experiment.sh 0 randwrite6g uniform
+#              ./scripts/run_experiment.sh 3 randwrite6g uniform
 #
-# 정책 간 비교는 sysfs로 gc_policy만 바꾸는 게 아니라 매번 모듈을 완전히 리로드해야
-# cb_clock/write pointer/free line list 같은 FTL 내부 상태가 오염되지 않는다는 게
-# 2026-07-27에 확인됨 -> 이 스크립트는 매 실행마다 umount -> rmmod -> insmod(gc_policy
-# 파라미터로 정책 지정) -> mkfs -> mount 를 처음부터 다시 수행함.
+# 정책 간 비교는 sysfs로 runtime parameter만 바꾸는 게 아니라 매번 모듈을 완전히
+# 리로드해야 cb_clock/write pointer/free line list 같은 FTL 내부 상태가 오염되지
+# 않는다는 게 2026-07-27에 확인됨 -> 이 스크립트는 매 실행마다
+# umount -> rmmod -> insmod(TLC GC 고정 + SLC migration policy 지정) -> mkfs -> mount
+# 를 처음부터 다시 수행함.
 # sudo가 필요한 명령이 있어서 반드시 사용자 터미널에서 직접 실행할 것.
 set -euo pipefail
 
-POLICY="${1:?policy(0|1|2) 필요}"
+POLICY="${1:?policy(0|1|2|3) 필요}"
 LABEL="${2:?label 필요}"
 WORKLOAD="${3:-uniform}"
 
@@ -31,6 +35,7 @@ MEMMAP_START="${MEMMAP_START:-2G}"
 MEMMAP_SIZE="${MEMMAP_SIZE:-1G}"
 NVME_CPUS="${NVME_CPUS:-2,3}"
 MOUNT_DIR="${MOUNT_DIR:-$HOME/nvme_mount}"
+TLC_GC_POLICY="${TLC_GC_POLICY:-0}"
 # hotcold 워크로드 전용 (v7, 2026-07-30): 콜드/핫을 물리적으로 분리된 line에
 # 쓰기 위해 cold_fill 이후 cold_touch/hot_churn을 병렬 실행함 (자세한 이유는
 # scripts/workloads/hotcold.fio 상단 주석 참고). v6(size 기반, COLD_TOUCH_SIZE=15G)는
@@ -83,8 +88,9 @@ NORANDOMMAP_OPT=""
 case "$POLICY" in
   0) POLICY_NAME=greedy ;;
   1) POLICY_NAME=random ;;
-  2) POLICY_NAME=costbenefit ;;
-  *) echo "policy는 0/1/2 중 하나여야 함" >&2; exit 1 ;;
+  2) POLICY_NAME=fifo ;;
+  3) POLICY_NAME=costbenefit ;;
+  *) echo "policy는 0/1/2/3 중 하나여야 함" >&2; exit 1 ;;
 esac
 
 case "$WORKLOAD" in
@@ -94,7 +100,7 @@ esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TS="$(date +%Y%m%d_%H%M%S)"
-OUTDIR="$REPO_ROOT/results/${TS}_policy${POLICY}_${POLICY_NAME}_${LABEL}"
+OUTDIR="$REPO_ROOT/results/${TS}_slcpolicy${POLICY}_${POLICY_NAME}_${LABEL}"
 mkdir -p "$OUTDIR"
 mkdir -p "$MOUNT_DIR"
 
@@ -103,14 +109,12 @@ mkdir -p "$MOUNT_DIR"
 sudo umount "$MOUNT_DIR" 2>/dev/null || true
 sudo rmmod nvmev 2>/dev/null || true
 sudo insmod "$REPO_ROOT/nvmev.ko" memmap_start="$MEMMAP_START" memmap_size="$MEMMAP_SIZE" \
-    cpus="$NVME_CPUS" gc_policy="$POLICY"
+    cpus="$NVME_CPUS" gc_policy="$TLC_GC_POLICY" slc_migration_policy="$POLICY"
 
-# insmod 직후 디바이스 노드가 바로 안 보일 수 있어 잠깐 대기
-for i in $(seq 1 20); do
-  [ -e "$NVME_DEV" ] && break
-  sleep 0.5
-done
-[ -e "$NVME_DEV" ] || { echo "$NVME_DEV 가 생성되지 않았음 (dmesg 확인 필요)" >&2; exit 1; }
+if command -v udevadm >/dev/null 2>&1; then
+  sudo udevadm settle
+fi
+[ -b "$NVME_DEV" ] || { echo "$NVME_DEV 가 생성되지 않았음 (dmesg 확인 필요)" >&2; exit 1; }
 
 sudo mkfs -t ext4 -F "$NVME_DEV"
 sudo mount "$NVME_DEV" "$MOUNT_DIR"
@@ -137,7 +141,11 @@ fi
 cat /proc/nvmev/debug > "$OUTDIR/erase_cnt.txt"
 
 awk '
-  /^GC_VALID_PAGE_MIGRATE_CNT/{migrate=$2}
+  /^GC_VALID_PAGE_MIGRATE_CNT/{legacy_migrate=$2}
+  /^TLC_GC_CNT/{tlc_gc_cnt=$2}
+  /^TLC_GC_VALID_PAGE_MIGRATE_CNT/{tlc_gc_migrate=$2}
+  /^SLC_MIGRATION_CNT/{slc_migration_cnt=$2}
+  /^SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT/{slc_migrate=$2}
   /^DIAG_TOTAL_GC/{diag_total=$2}
   /^DIAG_IDENTITY_DIVERGE/{diag_diverge=$2}
   /^DIAG_SUM_GREEDY_VPC/{diag_sum_greedy=$2}
@@ -153,7 +161,10 @@ awk '
   # CB 89,433) 엄밀한 비교가 아님 -> 마모 균등도는 모집단이 고정된 이 값으로 볼 것.
   NF==7 {all_sum+=$7; all_sumsq+=$7*$7; all_n++}
   END {
-    printf "nonzero_blocks=%d sum=%d max=%d gc_migrate_pages=%d", n, sum, max, migrate
+    printf "nonzero_blocks=%d sum=%d max=%d", n, sum, max
+    printf " slc_migration_cnt=%d slc_migrate_pages=%d", slc_migration_cnt, slc_migrate
+    printf " tlc_gc_cnt=%d tlc_gc_migrate_pages=%d", tlc_gc_cnt, tlc_gc_migrate
+    printf " legacy_gc_migrate_pages=%d", legacy_migrate
     printf " total_gc=%d greedy_vs_cb_identity_diverge=%d", diag_total, diag_diverge
     if (diag_total > 0) {
       printf " avg_greedy_vpc=%.3f avg_cb_vpc=%.3f avg_abs_vpc_diff=%.3f same_vpc_different_line_ratio=%.4f",
@@ -179,6 +190,7 @@ awk '
   echo "timestamp=$TS"
   echo "policy=$POLICY"
   echo "policy_name=$POLICY_NAME"
+  echo "policy_target=slc_migration"
   echo "label=$LABEL"
   echo "workload=$WORKLOAD"
   echo "uniform_size=$UNIFORM_SIZE"
@@ -194,6 +206,8 @@ awk '
   echo "memmap_start=$MEMMAP_START"
   echo "memmap_size=$MEMMAP_SIZE"
   echo "cpus=$NVME_CPUS"
+  echo "tlc_gc_policy=$TLC_GC_POLICY"
+  echo "slc_migration_policy=$POLICY"
   echo "fio_cmd=$FIO_CMD"
 } > "$OUTDIR/meta.txt"
 

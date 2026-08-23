@@ -18,16 +18,21 @@ SMOKE_SIZE="${SMOKE_SIZE:-128M}"
 SMOKE_LOOPS="${SMOKE_LOOPS:-20}"
 COMPARE_SIZE="${COMPARE_SIZE:-600M}"
 COMPARE_LOOPS="${COMPARE_LOOPS:-10}"
+VERIFY_SIZE="${VERIFY_SIZE:-600M}"
+VERIFY_LOOPS="${VERIFY_LOOPS:-10}"
+VERIFY_BS="${VERIFY_BS:-4k}"
 
 usage() {
   cat <<'EOF'
 Usage:
   ./scripts/run_local_slc_policy_compare.sh smoke [policy]
   ./scripts/run_local_slc_policy_compare.sh compare
+  ./scripts/run_local_slc_policy_compare.sh verify [policy]
 
 Modes:
   smoke    Run a short local smoke test. Default policy is 0 unless a policy is given.
   compare  Run slc_migration_policy=0/1/2/3 with fresh reload for each run.
+  verify   Run fio CRC verification for one policy. Default policy is 0.
 
 Environment overrides:
   NVME_DEV         default: /dev/nvme0n1
@@ -40,6 +45,9 @@ Environment overrides:
   SMOKE_LOOPS      default: 20
   COMPARE_SIZE     default: 600M
   COMPARE_LOOPS    default: 10
+  VERIFY_SIZE      default: 600M
+  VERIFY_LOOPS     default: 10
+  VERIFY_BS        default: 4k
 EOF
 }
 
@@ -148,6 +156,57 @@ run_compare() {
   done
 }
 
+run_verify() {
+  local policy="${1:-0}"
+  local outdir
+  local fio_cmd
+
+  outdir="$REPO_ROOT/results/local_$(date +%Y%m%d_%H%M%S)_slc_verify_policy${policy}"
+  mkdir -p "$outdir" "$MOUNT_DIR"
+
+  reload_module "$policy"
+
+  fio_cmd="fio --name=verify_crc --filename=$MOUNT_DIR/verifyfile --size=$VERIFY_SIZE --rw=randwrite --bs=$VERIFY_BS --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=$VERIFY_LOOPS --verify=crc32c --verify_fatal=1 --verify_state_save=0 --do_verify=1 --group_reporting"
+  echo "$fio_cmd" > "$outdir/fio_cmd.txt"
+
+  fio --name=verify_crc \
+      --filename="$MOUNT_DIR/verifyfile" \
+      --size="$VERIFY_SIZE" \
+      --rw=randwrite \
+      --bs="$VERIFY_BS" \
+      --numjobs=1 \
+      --iodepth=16 \
+      --ioengine=libaio \
+      --direct=1 \
+      --loops="$VERIFY_LOOPS" \
+      --verify=crc32c \
+      --verify_fatal=1 \
+      --verify_state_save=0 \
+      --do_verify=1 \
+      --group_reporting \
+      --output-format=json \
+      --output="$outdir/fio.json"
+
+  cat /proc/nvmev/debug > "$outdir/debug.txt"
+  {
+    echo "policy=$policy"
+    echo "verify_size=$VERIFY_SIZE"
+    echo "verify_loops=$VERIFY_LOOPS"
+    echo "verify_bs=$VERIFY_BS"
+    echo "nvme_dev=$NVME_DEV"
+    echo "memmap_start=$MEMMAP_START"
+    echo "memmap_size=$MEMMAP_SIZE"
+    echo "cpus=$NVME_CPUS"
+    echo "tlc_gc_policy=$TLC_GC_POLICY"
+    echo "verify_status=pass"
+  } > "$outdir/meta.txt"
+  cleanup_mount
+
+  echo "result_dir=$outdir"
+  rg 'SLC_MIGRATION_CNT|SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT|TLC_GC_CNT|TLC_GC_VALID_PAGE_MIGRATE_CNT|DIAG_' \
+    "$outdir/debug.txt" || true
+}
+
 trap cleanup_mount EXIT
 
 case "$MODE" in
@@ -158,6 +217,10 @@ case "$MODE" in
   compare)
     mkdir -p "$MOUNT_DIR"
     run_compare
+    ;;
+  verify)
+    mkdir -p "$MOUNT_DIR"
+    run_verify "${SINGLE_POLICY:-0}"
     ;;
   -h|--help|help)
     usage

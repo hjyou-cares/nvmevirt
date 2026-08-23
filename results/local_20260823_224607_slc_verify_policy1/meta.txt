@@ -1,0 +1,10 @@
+policy=1
+verify_size=600M
+verify_loops=10
+verify_bs=4k
+nvme_dev=/dev/nvme0n1
+memmap_start=2G
+memmap_size=1G
+cpus=2,3
+tlc_gc_policy=0
+verify_status=pass

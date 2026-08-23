@@ -392,3 +392,154 @@
 - smoke test는 별도 저장 파일이 남지 않아, 자세한 수치는 4정책 비교 결과 쪽이 사실상 오늘의 기준 기록이다.
 - 현재 로컬 workload(`600M x 10`)에서는 `0/2/3` 차이가 충분히 드러나지 않아, 더 적절한 workload 탐색이 필요하다.
 - 데이터 정합성 검증(`fio verify` 또는 read-back)은 아직 추가되지 않았다.
+
+## 2026-08-23: `run_experiment.sh`를 SLC migration policy 기준으로 전환
+
+### 확인한 내용
+
+- 기존 [scripts/run_experiment.sh](/home/hjyu216/nvmevirt/scripts/run_experiment.sh)는 여전히 실습1/초기 실습2 기준의 `gc_policy` 중심 실험 스크립트였다.
+- 현재 코드에서는 `gc_policy`와 `slc_migration_policy`의 의미가 분리됐으므로, 기존처럼 첫 번째 policy 인자를 곧바로 `gc_policy`에 연결하면 실습2 실험 의도와 어긋난다.
+- 사용자는 오늘 “기존 단일 policy 실험 흐름을 지금은 TLC GC 고정 + SLC migration 비교로 연결하는 의미냐”라고 확인했고, 그 방향으로 정리하기로 했다.
+
+### 변경한 내용
+
+- [scripts/run_experiment.sh](/home/hjyu216/nvmevirt/scripts/run_experiment.sh)를 수정했다.
+  - 첫 번째 인자 `policy`를 `slc_migration_policy` 의미로 재정의했다.
+  - 허용 범위를 `0|1|2|3`으로 늘리고 이름 매핑을 `Greedy/Random/FIFO/Cost-Benefit`으로 바꿨다.
+  - `TLC_GC_POLICY` 환경변수를 추가하고 기본값을 `0`으로 뒀다.
+  - `insmod` 시 `gc_policy="$TLC_GC_POLICY"`와 `slc_migration_policy="$POLICY"`를 함께 넘기도록 바꿨다.
+  - 결과 디렉터리 이름을 `slcpolicy*` 형태로 바꿨다.
+  - `meta.txt`에 `policy_target=slc_migration`, `tlc_gc_policy`, `slc_migration_policy`를 추가 기록하게 했다.
+  - 기존 sleep loop는 제거하고 `udevadm settle` 우선 방식으로 device 생성을 기다리게 했다.
+  - `summary.txt`는 `SLC_MIGRATION_CNT`, `SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT`, `TLC_GC_CNT`, `TLC_GC_VALID_PAGE_MIGRATE_CNT`를 직접 읽어 요약하게 바꿨다.
+
+### 변경 이유
+
+- 실습2에서 비교 대상은 TLC GC 정책이 아니라 SLC migration victim policy이므로, 실험 스크립트의 policy 의미도 거기에 맞춰야 한다.
+- `gc_policy`를 그대로 실험축으로 두면 “정책 실험을 하고 있다”는 이름과 달리 실제로는 TLC GC만 바꾸게 되어, 현재 로컬에서 확인한 SLC migration 결과와 연결이 끊긴다.
+- 로컬 스크립트와 본 실험 스크립트의 의미를 맞춰 두면 다음 세션부터 manual command와 scripted run이 같은 실험축을 공유하게 된다.
+
+### 검증 결과
+
+- `bash -n scripts/run_experiment.sh` 문법 확인을 통과했다.
+- 이번 세션에서는 실제 full run까지는 아직 다시 돌리지 않았다.
+
+### 남은 위험
+
+- `scripts/collect_summary.sh`는 여전히 `policy`/`policy_name` 중심 CSV만 모으므로, 필요하면 `policy_target`이나 migration counter를 추가 열로 확장할 수 있다.
+- `run_filebench_experiment.sh`는 아직 `gc_policy` 중심이라, filebench도 실습2 migration 비교에 쓸 계획이면 같은 정리가 추가로 필요하다.
+
+## 2026-08-23: 로컬 CRC verify 모드 추가
+
+### 확인한 내용
+
+- 현재까지는 SLC migration/TLC GC가 "돈다"는 것만 확인했지, 데이터 정합성은 아직 검증하지 않았다.
+- 저장소 과거 기록에는 `fio --verify=crc32c --verify_fatal=1`로 GC 이후 read-back CRC 검증을 수행한 방법론이 이미 남아 있다.
+- 지금 로컬 흐름에서는 기존 수동 명령 대신 [scripts/run_local_slc_policy_compare.sh](/home/hjyu216/nvmevirt/scripts/run_local_slc_policy_compare.sh)에 verify 모드를 붙이는 편이 다음 재실행에 유리하다.
+
+### 변경한 내용
+
+- [scripts/run_local_slc_policy_compare.sh](/home/hjyu216/nvmevirt/scripts/run_local_slc_policy_compare.sh)에 `verify` 모드를 추가했다.
+  - 사용법: `./scripts/run_local_slc_policy_compare.sh verify [policy]`
+  - 기본 workload: `VERIFY_SIZE=600M`, `VERIFY_LOOPS=10`, `VERIFY_BS=4k`
+  - fio 옵션: `--verify=crc32c --verify_fatal=1 --verify_state_save=0 --do_verify=1`
+  - 결과 저장: `results/local_*_slc_verify_policyN/`
+  - 산출물: `fio.json`, `debug.txt`, `meta.txt`, `fio_cmd.txt`
+
+### 변경 이유
+
+- 정합성 검증을 workload 조정보다 먼저 해 두는 편이 이후 비교 실험의 해석 안정성이 높다.
+- manual command보다 스크립트 모드로 남겨 두면 같은 fresh reload 조건을 반복 재사용하기 쉽다.
+
+### 검증 결과
+
+- `bash -n scripts/run_local_slc_policy_compare.sh` 문법 확인을 통과했다.
+- 실제 verify run 결과는 아직 이 세션에서 생성하지 않았다.
+
+### 남은 위험
+
+- random overwrite + verify workload에서 정책별 runtime이 길어질 수 있으므로, 필요하면 `VERIFY_SIZE`나 `VERIFY_LOOPS`를 줄여 먼저 smoke verify를 할 수 있다.
+- verify 결과가 나오기 전까지는 데이터 정합성이 실제로 통과했다는 결론을 내릴 수 없다.
+
+## 2026-08-23: `zipf_nrm` 로컬 조건으로 SLC migration policy 차이 확인
+
+### 확인한 내용
+
+- 기존 로컬 uniform(`600M x 10`)에서는 Random만 크게 다르고 Greedy/FIFO/Cost-Benefit은 거의 수렴했다.
+- 과거 기록을 다시 확인한 결과, 단순 사용률 확대나 `zoned` 분포보다 `zipf:1.2`가 가장 강하게 정책 차이를 만들었다.
+- `NORANDOMMAP=1`을 켜야 fio가 "한 pass에 모든 블록을 정확히 한 번씩 방문"하는 인공적인 완전 무효화 패턴을 피할 수 있다는 점도 기존 스크립트 주석과 과거 로그에 정리돼 있었다.
+
+### 변경한 내용
+
+- 코드 변경은 하지 않았다.
+- [scripts/run_experiment.sh](/home/hjyu216/nvmevirt/scripts/run_experiment.sh)로 다음 로컬 실험을 4정책 모두 수행했다.
+  - `UNIFORM_SIZE=600M`
+  - `UNIFORM_LOOPS=10`
+  - `RANDOM_DIST=zipf:1.2`
+  - `NORANDOMMAP=1`
+  - `TLC_GC_POLICY=0`
+  - label=`zipf_nrm`
+- 결과 경로:
+  - [results/20260823_225741_slcpolicy0_greedy_zipf_nrm](/home/hjyu216/nvmevirt/results/20260823_225741_slcpolicy0_greedy_zipf_nrm)
+  - [results/20260823_230204_slcpolicy1_random_zipf_nrm](/home/hjyu216/nvmevirt/results/20260823_230204_slcpolicy1_random_zipf_nrm)
+  - [results/20260823_230615_slcpolicy2_fifo_zipf_nrm](/home/hjyu216/nvmevirt/results/20260823_230615_slcpolicy2_fifo_zipf_nrm)
+  - [results/20260823_231332_slcpolicy3_costbenefit_zipf_nrm](/home/hjyu216/nvmevirt/results/20260823_231332_slcpolicy3_costbenefit_zipf_nrm)
+
+### 변경 이유
+
+- uniform과 zoned가 계속 수렴한다면, "valid 상태로 오래 살아남는 데이터"가 실제로 생기는 분포를 만들어야 SLC migration policy 차이를 볼 수 있다.
+- `zipf:1.2`는 과거 TLC GC 실험에서 가장 뚜렷한 분리 신호를 줬으므로, 현재 실습2 로컬 조건에서도 가장 먼저 시도할 가치가 있었다.
+
+### 검증 결과
+
+- `0/2/3`도 더 이상 완전히 수렴하지 않았다.
+  - Greedy(`0`): `sum=180772`, `max=42`, `slc_migrate_pages=112766`, `tlc_gc_cnt=0`
+  - Random(`1`): `sum=180904`, `max=37`, `slc_migrate_pages=154228`, `tlc_gc_cnt=0`
+  - FIFO(`2`): `sum=180844`, `max=21`, `slc_migrate_pages=122230`, `tlc_gc_cnt=0`
+  - Cost-Benefit(`3`): `sum=180700`, `max=32`, `slc_migrate_pages=104875`, `tlc_gc_cnt=0`
+- 해석:
+  - TLC GC가 전혀 발생하지 않았으므로(`tlc_gc_cnt=0`), 이 비교는 사실상 SLC migration policy 차이만 읽어도 된다.
+  - Cost-Benefit은 4정책 중 `slc_migrate_pages`가 가장 낮았다.
+  - FIFO는 `max`가 가장 낮아 peak wear 억제 측면은 가장 강했지만, migration cost는 Cost-Benefit보다 높았다.
+  - Random은 migration cost가 가장 높았다.
+
+### 남은 위험
+
+- 현재 `zipf_nrm`은 각 정책당 1회 측정이라 반복측정이 아직 없다.
+- verify는 아직 `policy 0/1`만 통과했고 `2/3`는 남아 있다.
+- `scripts/collect_summary.sh`는 migration counter를 CSV 열로 모으지 않으므로, 결과 정리를 더 하려면 스크립트 보강이 필요할 수 있다.
+
+## 2026-08-23: 로컬 CRC verify 결과 확보 (`policy 0/1`)
+
+### 확인한 내용
+
+- verify 모드 추가 뒤 실제로 CRC 정합성 검증을 돌려 결과를 남겼다.
+- verify는 단순 write/read가 아니라 migration과 TLC GC가 함께 발생하는 조건에서도 수행됐다.
+
+### 변경한 내용
+
+- 코드 변경은 하지 않았다.
+- 다음 두 verify run 결과를 생성했다.
+  - [results/local_20260823_224010_slc_verify_policy0](/home/hjyu216/nvmevirt/results/local_20260823_224010_slc_verify_policy0)
+  - [results/local_20260823_224607_slc_verify_policy1](/home/hjyu216/nvmevirt/results/local_20260823_224607_slc_verify_policy1)
+
+### 변경 이유
+
+- workload 차이 해석보다 먼저, SLC migration/TLC GC가 섞인 상태에서 데이터가 깨지지 않는 최소 근거를 확보하는 게 우선이었다.
+
+### 검증 결과
+
+- `fio.json` 기준 두 run 모두 `error=0`으로 끝났다.
+- `policy 0` verify run:
+  - `SLC_MIGRATION_CNT 45030`
+  - `SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT 1440521`
+  - `TLC_GC_CNT 15526`
+- `policy 1` verify run:
+  - `SLC_MIGRATION_CNT 45031`
+  - `SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT 1130585`
+  - `TLC_GC_CNT 5842`
+- 즉 migration/GC가 실제로 발생한 상태에서도 CRC mismatch 없이 통과했다.
+
+### 남은 위험
+
+- 아직 `policy 2`와 `policy 3` verify 결과는 없다.

@@ -31,6 +31,9 @@
 - 로컬 VM smoke test에서 SLC write, SLC to TLC migration, TLC GC가 실제로 발생하는 것까지 확인했다.
 - 2026-08-23 로컬 fresh reload 4정책 비교(`results/local_20260823_212734_slc_policy_compare`)까지 수행했다.
 - 로컬 재실행용 `scripts/run_local_slc_policy_compare.sh`가 추가됐다.
+- `scripts/run_experiment.sh`도 `gc_policy` 고정 + `slc_migration_policy=0/1/2/3` 비교용으로 정리했다.
+- `scripts/run_local_slc_policy_compare.sh`에 CRC 기반 `verify` 모드가 추가됐다.
+- `zipf:1.2 + NORANDOMMAP=1` 로컬 조건(`zipf_nrm`)에서 `0/2/3`도 실제로 갈리는 첫 결과를 확보했다.
 
 ## 아직 안 된 것
 
@@ -42,9 +45,9 @@
 
 ## 다음 우선순위
 
-1. `scripts/run_experiment.sh`가 `slc_migration_policy`를 받도록 정리한다.
-2. `fio verify` 또는 read-back으로 데이터 정합성을 검증한다.
-3. 현재 로컬 workload에서 `0/2/3`이 수렴하는 이유를 더 드러내는 workload를 찾는다.
+1. `verify`는 현재 `policy 0/1`만 통과했으므로 `policy 2/3`에도 CRC 정합성 검증을 수행한다.
+2. `zipf_nrm` 결과를 반복측정하거나 `collect_summary.sh`에 migration counter 열을 추가해 집계 자동화를 붙인다.
+3. 필요하면 local-sized `hotcold v7`로 `zipf_nrm`과 차이를 비교한다.
 4. SLC/TLC별 timing과 oneshot 차이를 모델에 반영한다.
 5. read/write path가 pool별 timing을 실제로 타도록 구조를 정리한다.
 
