@@ -506,7 +506,6 @@
 ### 남은 위험
 
 - 현재 `zipf_nrm`은 각 정책당 1회 측정이라 반복측정이 아직 없다.
-- verify는 아직 `policy 0/1`만 통과했고 `2/3`는 남아 있다.
 - `scripts/collect_summary.sh`는 migration counter를 CSV 열로 모으지 않으므로, 결과 정리를 더 하려면 스크립트 보강이 필요할 수 있다.
 
 ## 2026-08-23: 로컬 CRC verify 결과 확보 (`policy 0/1`)
@@ -540,6 +539,37 @@
   - `TLC_GC_CNT 5842`
 - 즉 migration/GC가 실제로 발생한 상태에서도 CRC mismatch 없이 통과했다.
 
+## 2026-08-23: 로컬 CRC verify 결과 완료 (`policy 2/3`)
+
+### 확인한 내용
+
+- 앞서 `policy 0/1` verify는 통과했지만 `2/3`가 비어 있어, 오늘 마감 전 이 둘도 같은 조건으로 채웠다.
+
+### 변경한 내용
+
+- 코드 변경은 하지 않았다.
+- 다음 두 verify run 결과를 추가 생성했다.
+  - [results/local_20260823_232744_slc_verify_policy2](/home/hjyu216/nvmevirt/results/local_20260823_232744_slc_verify_policy2)
+  - [results/local_20260823_233241_slc_verify_policy3](/home/hjyu216/nvmevirt/results/local_20260823_233241_slc_verify_policy3)
+
+### 변경 이유
+
+- `0/1`만 통과한 상태로 마무리하면, migration policy 4종 전체에 대한 최소 정합성 체크가 비어 있게 된다.
+
+### 검증 결과
+
+- `policy 2` verify run:
+  - `fio.json` 기준 `error=0`
+  - `TLC_GC_CNT 15524`
+  - `SLC_MIGRATION_CNT 45028`
+  - `SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT 1440426`
+- `policy 3` verify run:
+  - `fio.json` 기준 `error=0`
+  - `TLC_GC_CNT 15524`
+  - `SLC_MIGRATION_CNT 45028`
+  - `SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT 1440425`
+- 이로써 `policy 0/1/2/3` 네 정책 모두 migration/GC가 실제로 발생하는 조건에서 CRC verify를 통과했다.
+
 ### 남은 위험
 
-- 아직 `policy 2`와 `policy 3` verify 결과는 없다.
+- verify는 통과했지만, `zipf_nrm`은 아직 각 정책 1회씩만 있어 반복측정이 없다.

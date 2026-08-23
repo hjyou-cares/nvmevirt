@@ -11,9 +11,9 @@
 
 ## 다음에 바로 할 일
 
-1. `verify`는 현재 `policy 0/1`만 통과했으므로 `policy 2/3`에도 같은 CRC 검증을 수행한다.
-2. `zipf_nrm`은 차이를 잘 드러냈으므로, 필요하면 같은 조건으로 반복측정하거나 `collect_summary.sh`에 migration counter 열을 추가해 집계 자동화를 붙인다.
-3. 그 다음에 local-sized `hotcold v7`도 한 번 돌려 `zipf_nrm`과 차이를 비교할지 결정한다.
+1. `zipf_nrm`은 차이를 잘 드러냈으므로, 같은 조건으로 반복측정하거나 `collect_summary.sh`에 migration counter 열을 추가해 집계 자동화를 붙인다.
+2. 그 다음에 local-sized `hotcold v7`도 한 번 돌려 `zipf_nrm`과 차이를 비교할지 결정한다.
+3. 이후 SLC/TLC timing 분리와 legacy write path 정리로 다시 돌아간다.
 
 ## 미구현 핵심 항목
 
@@ -90,13 +90,15 @@
 - CRC verify도 로컬에서 실제로 돌렸다.
   - `results/local_20260823_224010_slc_verify_policy0/`: `error=0`
   - `results/local_20260823_224607_slc_verify_policy1/`: `error=0`
-  - 두 경우 모두 verify run 중 `SLC_MIGRATION_CNT`와 `TLC_GC_CNT`가 실제로 증가해, migration/GC가 섞인 상태에서도 CRC mismatch 없이 통과했다.
+  - `results/local_20260823_232744_slc_verify_policy2/`: `error=0`
+  - `results/local_20260823_233241_slc_verify_policy3/`: `error=0`
+  - 네 경우 모두 verify run 중 `SLC_MIGRATION_CNT`와 `TLC_GC_CNT`가 실제로 증가해, migration/GC가 섞인 상태에서도 CRC mismatch 없이 통과했다.
 
 ## 다음 세션 시작점
 
 - 다음 세션은 로컬 `~/nvmevirt`에서 시작하는 것을 우선으로 한다.
 - 시작 확인 순서는 `git status --short`, `ls results/local_* | tail`, `sed -n '1,220p' scripts/run_local_slc_policy_compare.sh` 정도면 충분하다.
-- 목표는 `policy 2/3` verify까지 채운 뒤, `zipf_nrm` 결과를 반복측정 또는 요약 자동화로 정리하는 것이다.
+- 목표는 `zipf_nrm` 결과를 반복측정 또는 요약 자동화로 정리한 뒤, local-sized `hotcold v7` 비교 여부를 결정하는 것이다.
 
 ## 참고 문서
 

@@ -34,6 +34,7 @@
 - `scripts/run_experiment.sh`도 `gc_policy` 고정 + `slc_migration_policy=0/1/2/3` 비교용으로 정리했다.
 - `scripts/run_local_slc_policy_compare.sh`에 CRC 기반 `verify` 모드가 추가됐다.
 - `zipf:1.2 + NORANDOMMAP=1` 로컬 조건(`zipf_nrm`)에서 `0/2/3`도 실제로 갈리는 첫 결과를 확보했다.
+- CRC verify는 이제 `policy 0/1/2/3` 네 개 모두 통과했다.
 
 ## 아직 안 된 것
 
@@ -45,11 +46,10 @@
 
 ## 다음 우선순위
 
-1. `verify`는 현재 `policy 0/1`만 통과했으므로 `policy 2/3`에도 CRC 정합성 검증을 수행한다.
-2. `zipf_nrm` 결과를 반복측정하거나 `collect_summary.sh`에 migration counter 열을 추가해 집계 자동화를 붙인다.
-3. 필요하면 local-sized `hotcold v7`로 `zipf_nrm`과 차이를 비교한다.
-4. SLC/TLC별 timing과 oneshot 차이를 모델에 반영한다.
-5. read/write path가 pool별 timing을 실제로 타도록 구조를 정리한다.
+1. `zipf_nrm` 결과를 반복측정하거나 `collect_summary.sh`에 migration counter 열을 추가해 집계 자동화를 붙인다.
+2. 필요하면 local-sized `hotcold v7`로 `zipf_nrm`과 차이를 비교한다.
+3. SLC/TLC별 timing과 oneshot 차이를 모델에 반영한다.
+4. read/write path가 pool별 timing을 실제로 타도록 구조를 정리한다.
 
 ## 작업 시 주의사항
 
