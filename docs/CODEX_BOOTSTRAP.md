@@ -34,7 +34,11 @@
 - `scripts/run_experiment.sh`도 `gc_policy` 고정 + `slc_migration_policy=0/1/2/3` 비교용으로 정리했다.
 - `scripts/run_local_slc_policy_compare.sh`에 CRC 기반 `verify` 모드가 추가됐다.
 - `zipf:1.2 + NORANDOMMAP=1` 로컬 조건(`zipf_nrm`)에서 `0/2/3`도 실제로 갈리는 첫 결과를 확보했다.
+- 2026-08-24에 같은 `zipf_nrm` 조건으로 `rep2` 네 정책도 완료했다.
+- 2026-08-24에 같은 조건으로 `rep2_rerun`과 유효한 `rep3` 네 정책도 완료했다.
+- `zipf_nrm` 4회분에서 `slc_migrate_pages` 순위는 일관되게 `Cost-Benefit < Greedy < FIFO < Random`으로 유지됐다.
 - CRC verify는 이제 `policy 0/1/2/3` 네 개 모두 통과했다.
+- `scripts/collect_summary.sh`는 이제 migration counter와 workload 조건까지 CSV로 집계한다.
 
 ## 아직 안 된 것
 
@@ -42,12 +46,13 @@
 - SLC/TLC별 `oneshot page size`와 latency model 분리가 없다.
 - read path는 mapping은 공용이지만 timing은 아직 SLC/TLC를 구분하지 않는다.
 - `slc_rt.slc_wp`, `slc_rt.tlc_wp`, `slc_rt.tlc_gc_wp`는 구조체만 있고 실제 I/O 경로는 아직 legacy `wp/gc_wp`를 쓴다.
-- 정책 비교 실험과 데이터 정합성 검증은 아직 남아 있다.
+- local-sized `hotcold v7` 정책 비교가 아직 없다.
+- `zipf_nrm` 4회분을 표/본문으로 최종 정리하는 작업이 남아 있다.
 
 ## 다음 우선순위
 
-1. `zipf_nrm` 결과를 반복측정하거나 `collect_summary.sh`에 migration counter 열을 추가해 집계 자동화를 붙인다.
-2. 필요하면 local-sized `hotcold v7`로 `zipf_nrm`과 차이를 비교한다.
+1. local-sized `hotcold v7`를 policy별 1회씩 돌려 `zipf_nrm`과 방향성이 같은지 확인한다.
+2. `zipf_nrm` 4회분과 `hotcold v7` 1회분을 묶어 정책별 요약 표를 만든다.
 3. SLC/TLC별 timing과 oneshot 차이를 모델에 반영한다.
 4. read/write path가 pool별 timing을 실제로 타도록 구조를 정리한다.
 
@@ -60,6 +65,11 @@
 - 실습1의 TLC GC 정책과 실습2의 SLC migration 정책을 같은 문제로 취급하지 않는다.
 - 정책 비교에서는 `echo reset`만 쓰지 말고 `umount -> rmmod -> insmod -> mkfs -> mount`로 fresh reload 한다.
 - 로컬 VM에서는 서버용 `600M x 250`를 그대로 쓰지 말고, 현재 기준 `smoke=128M x 20`, `compare=600M x 10`을 우선 사용한다.
+- 로컬 `zipf_nrm` 재실행 시 `RANDOM_DIST=zipf:1.2 NORANDOMMAP=1 UNIFORM_SIZE=600M UNIFORM_LOOPS=10`을 명시하지 않으면 기본 `uniform 600M x 250`로 돌아간다.
+- 로컬에서 반복 실행 중 VS Code Remote가 끊기면 대체로 `rmmod -> insmod -> mkfs -> mount` 재초기화 경계에서 guest가 잠깐 멎는 경우이므로 `tmux` 안에서 돌리는 편이 안전하다.
+- 집계 자동화 확인은 `./scripts/collect_summary.sh > /tmp/nvmevirt_summary.csv`로 먼저 검증한다.
+- `results/20260824_173844_slcpolicy1_random_zipf_nrm_rep2/`는 비어 있는 실패 흔적이라 집계 대상이 아니다.
+- `results/*zipf_nrm_rep2_rerun`와 `results/*zipf_nrm_rep3` 중 `meta.txt`/`summary.txt`가 없는 디렉터리는 중간 실패 흔적이므로 집계 대상이 아니다.
 - 기존 사용자 변경은 절대 되돌리지 않는다.
 
 ## 필요할 때만 보는 문서

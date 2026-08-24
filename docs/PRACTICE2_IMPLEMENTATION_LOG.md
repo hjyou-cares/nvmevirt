@@ -573,3 +573,54 @@
 ### 남은 위험
 
 - verify는 통과했지만, `zipf_nrm`은 아직 각 정책 1회씩만 있어 반복측정이 없다.
+
+## 2026-08-24: `zipf_nrm` 반복측정 완료 (`rep2`, `rep2_rerun`, `rep3`)
+
+### 확인한 내용
+
+- 로컬 `zipf_nrm` baseline 1회만으로는 정책 경향은 보였지만 반복측정이 없어 해석 안정성이 부족했다.
+- `scripts/collect_summary.sh` 확장으로 migration counter와 workload 조건을 CSV로 함께 읽을 수 있게 되어, 반복 run 비교가 이전보다 쉬워졌다.
+- 로컬 VM에서는 `run_experiment.sh`의 기본값이 `uniform 600M x 250`이라, `RANDOM_DIST`/`NORANDOMMAP`/`UNIFORM_LOOPS=10`를 빠뜨리면 의도보다 훨씬 긴 실험이 된다.
+
+### 변경한 내용
+
+- 코드 변경은 하지 않았다.
+- 다음 유효한 로컬 결과를 추가 생성했다.
+  - `zipf_nrm_rep2`
+    - [results/20260824_173902_slcpolicy0_greedy_zipf_nrm_rep2](/home/hjyu216/nvmevirt/results/20260824_173902_slcpolicy0_greedy_zipf_nrm_rep2)
+    - [results/20260824_174027_slcpolicy1_random_zipf_nrm_rep2](/home/hjyu216/nvmevirt/results/20260824_174027_slcpolicy1_random_zipf_nrm_rep2)
+    - [results/20260824_174206_slcpolicy2_fifo_zipf_nrm_rep2](/home/hjyu216/nvmevirt/results/20260824_174206_slcpolicy2_fifo_zipf_nrm_rep2)
+    - [results/20260824_175416_slcpolicy3_costbenefit_zipf_nrm_rep2](/home/hjyu216/nvmevirt/results/20260824_175416_slcpolicy3_costbenefit_zipf_nrm_rep2)
+  - `zipf_nrm_rep2_rerun`
+    - [results/20260824_223708_slcpolicy0_greedy_zipf_nrm_rep2_rerun](/home/hjyu216/nvmevirt/results/20260824_223708_slcpolicy0_greedy_zipf_nrm_rep2_rerun)
+    - [results/20260824_224519_slcpolicy1_random_zipf_nrm_rep2_rerun](/home/hjyu216/nvmevirt/results/20260824_224519_slcpolicy1_random_zipf_nrm_rep2_rerun)
+    - [results/20260824_225438_slcpolicy2_fifo_zipf_nrm_rep2_rerun](/home/hjyu216/nvmevirt/results/20260824_225438_slcpolicy2_fifo_zipf_nrm_rep2_rerun)
+    - [results/20260824_230218_slcpolicy3_costbenefit_zipf_nrm_rep2_rerun](/home/hjyu216/nvmevirt/results/20260824_230218_slcpolicy3_costbenefit_zipf_nrm_rep2_rerun)
+  - `zipf_nrm_rep3`
+    - [results/20260824_232544_slcpolicy0_greedy_zipf_nrm_rep3](/home/hjyu216/nvmevirt/results/20260824_232544_slcpolicy0_greedy_zipf_nrm_rep3)
+    - [results/20260824_232938_slcpolicy1_random_zipf_nrm_rep3](/home/hjyu216/nvmevirt/results/20260824_232938_slcpolicy1_random_zipf_nrm_rep3)
+    - [results/20260824_233522_slcpolicy2_fifo_zipf_nrm_rep3](/home/hjyu216/nvmevirt/results/20260824_233522_slcpolicy2_fifo_zipf_nrm_rep3)
+    - [results/20260824_234119_slcpolicy3_costbenefit_zipf_nrm_rep3](/home/hjyu216/nvmevirt/results/20260824_234119_slcpolicy3_costbenefit_zipf_nrm_rep3)
+- `results/20260824_173844_slcpolicy1_random_zipf_nrm_rep2/`와 일부 `rep2_rerun`/`rep3` 빈 디렉터리는 중간 실패 흔적으로 보고 집계에서 제외했다.
+
+### 변경 이유
+
+- baseline 1회 결과만으로는 우연 변동인지 구조적 차이인지 분리하기 어렵다.
+- 같은 `zipf:1.2 + NORANDOMMAP=1 + 600M x 10` 조건에서 반복측정을 추가하면, 정책 간 순위가 안정적인지 빠르게 확인할 수 있다.
+
+### 검증 결과
+
+- 공통 조건: `UNIFORM_SIZE=600M`, `UNIFORM_LOOPS=10`, `RANDOM_DIST=zipf:1.2`, `NORANDOMMAP=1`, `TLC_GC_POLICY=0`
+- `slc_migrate_pages`는 4회 모두 같은 순위를 유지했다.
+  - Cost-Benefit(`3`): `104229`, `105106`, `105195`
+  - Greedy(`0`): `112686`, `113526`, `113104`
+  - FIFO(`2`): `120384`, `128099`, `126602`
+  - Random(`1`): `152216`, `163745`, `159498`
+- baseline까지 포함하면 `slc_migrate_pages` 순위는 4회 내내 `Cost-Benefit < Greedy < FIFO < Random`이다.
+- `max`는 baseline, `rep2`, `rep2_rerun`, `rep3` 네 번 모두 FIFO(`2`)가 최저였다 (`21` 고정).
+- `tlc_gc_cnt`는 이번 반복측정 12개 run 전부 `0`이라, 이 조건은 사실상 SLC migration policy만 비교한 결과로 읽을 수 있다.
+
+### 남은 위험
+
+- 로컬 `zipf_nrm`에서는 순위가 안정적이지만, `hotcold v7`에서도 같은 방향인지 아직 모른다.
+- VS Code Remote 단절은 대개 `umount/rmmod/insmod/mkfs/mount` 경계에서 발생하므로, 다음 로컬 반복 실행은 `tmux` 안에서 진행하는 편이 안전하다.

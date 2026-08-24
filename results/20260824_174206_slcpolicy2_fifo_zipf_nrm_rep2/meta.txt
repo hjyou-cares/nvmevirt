@@ -1,0 +1,22 @@
+timestamp=20260824_174206
+policy=2
+policy_name=fifo
+policy_target=slc_migration
+label=zipf_nrm_rep2
+workload=uniform
+uniform_size=600M
+uniform_loops=10
+random_dist=zipf:1.2
+norandommap=1
+cold_size=30G
+cold_touch_size=15G
+hot_size=1G
+hotcold_runtime=90
+disk_condition=fresh_module_reload_and_mkfs
+nvme_dev=/dev/nvme0n1
+memmap_start=2G
+memmap_size=1G
+cpus=2,3
+tlc_gc_policy=0
+slc_migration_policy=2
+fio_cmd=fio --name=gc_stress --filename=$MOUNT_DIR/testfile2 --size=600M --rw=randwrite --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=10 --random_distribution=zipf:1.2 --norandommap=1 --group_reporting

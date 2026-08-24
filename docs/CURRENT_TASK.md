@@ -11,16 +11,16 @@
 
 ## 다음에 바로 할 일
 
-1. `zipf_nrm`은 차이를 잘 드러냈으므로, 같은 조건으로 반복측정하거나 `collect_summary.sh`에 migration counter 열을 추가해 집계 자동화를 붙인다.
-2. 그 다음에 local-sized `hotcold v7`도 한 번 돌려 `zipf_nrm`과 차이를 비교할지 결정한다.
+1. local-sized `hotcold v7`를 policy별 1회씩 돌려 `zipf_nrm`과 방향성이 같은지 본다.
+2. `zipf_nrm` 4회분과 `hotcold v7`를 함께 요약해 정책별 장단점을 표로 정리한다.
 3. 이후 SLC/TLC timing 분리와 legacy write path 정리로 다시 돌아간다.
 
 ## 미구현 핵심 항목
 
+- local-sized `hotcold v7` 정책 비교
 - SLC/TLC read-write timing 분리
 - SLC/TLC `oneshot page size` 차이 반영
 - read path timing 분리
-- 데이터 정합성 검증
 
 ## 주의할 점
 
@@ -28,6 +28,8 @@
 - `echo reset > /proc/nvmev/debug`는 counter만 초기화하고 FTL state는 초기화하지 않는다.
 - 정책 비교는 반드시 `umount -> rmmod -> insmod -> mkfs -> mount`의 fresh reload 조건으로 수행한다.
 - 로컬 VM은 용량이 작아 `No space left on device` 같은 파일시스템 노이즈가 섞이기 쉽다. 정책 비교는 서버 우선으로 진행한다.
+- 로컬 `zipf_nrm` 재실행은 `RANDOM_DIST=zipf:1.2 NORANDOMMAP=1 UNIFORM_SIZE=600M UNIFORM_LOOPS=10 TLC_GC_POLICY=0`를 반드시 명시한다. 빠뜨리면 기본 `uniform 600M x 250`가 돌아간다.
+- 로컬에서 정책별 `for` 루프를 돌릴 때 VS Code Remote가 끊기면 대개 `umount/rmmod/insmod/mkfs/mount` 재초기화 경계 문제라서 `tmux` 안에서 실행하는 편이 안전하다.
 - 실제 I/O는 아직 legacy `lm/wp/gc_wp`를 많이 공유한다.
 - `gc_policy`는 TLC GC 전용 의미로 유지되고, `slc_migration_policy`가 별도로 추가됐다.
 - 실습1의 heap staleness 교훈은 migration Cost-Benefit에도 그대로 다시 검토해야 한다.
@@ -76,6 +78,10 @@
   - `fio --verify=crc32c --verify_fatal=1 --do_verify=1` 기반으로 단일 policy CRC 검증을 수행한다.
   - 기본 verify workload는 `VERIFY_SIZE=600M`, `VERIFY_LOOPS=10`, `VERIFY_BS=4k`다.
   - 결과는 `results/local_*_slc_verify_policyN/` 아래에 `fio.json`, `debug.txt`, `meta.txt`, `fio_cmd.txt`로 저장된다.
+- `scripts/collect_summary.sh`를 확장했다.
+  - 기존 `erase_sum`/`erase_max`/latency 외에 `policy_target`, `slc_migration_policy`, `tlc_gc_policy`, `random_dist`, `norandommap`, `uniform_size`, `uniform_loops`, `cold_size`, `cold_touch_size`, `hot_size`, `hotcold_runtime`, `memmap_size`, `slc_migration_cnt`, `slc_migrate_pages`, `tlc_gc_cnt`, `tlc_gc_migrate_pages`, `legacy_gc_migrate_pages`, `erase_cv`, `erase_cv_all`도 CSV 열로 수집한다.
+  - `summary.txt`가 있는 실험은 해당 값을 우선 사용하고, `debug.txt`/`erase_cnt.txt`만 있는 결과는 counter를 fallback으로 읽는다.
+  - 로컬 verify 결과처럼 `summary.txt`가 없는 디렉터리도 빈 칸 허용 형태로 함께 집계된다.
 - `zipf:1.2 + NORANDOMMAP=1` 조건으로 `run_experiment.sh` 4정책 비교를 수행했고, 이 로컬 workload에서는 기존 uniform보다 정책 차이가 분명히 커졌다.
   - 공통 조건: `UNIFORM_SIZE=600M`, `UNIFORM_LOOPS=10`, `RANDOM_DIST=zipf:1.2`, `NORANDOMMAP=1`, `TLC_GC_POLICY=0`
   - Greedy(`0`): `sum=180772`, `max=42`, `slc_migrate_pages=112766`, `tlc_gc_cnt=0`
@@ -93,12 +99,33 @@
   - `results/local_20260823_232744_slc_verify_policy2/`: `error=0`
   - `results/local_20260823_233241_slc_verify_policy3/`: `error=0`
   - 네 경우 모두 verify run 중 `SLC_MIGRATION_CNT`와 `TLC_GC_CNT`가 실제로 증가해, migration/GC가 섞인 상태에서도 CRC mismatch 없이 통과했다.
+- 2026-08-24에 `zipf_nrm_rep2`도 로컬에서 네 정책 모두 완료됐다.
+  - 공통 조건: `UNIFORM_SIZE=600M`, `UNIFORM_LOOPS=10`, `RANDOM_DIST=zipf:1.2`, `NORANDOMMAP=1`, `TLC_GC_POLICY=0`
+  - Greedy(`0`) `results/20260824_173902_slcpolicy0_greedy_zipf_nrm_rep2/`: `sum=180644`, `max=42`, `slc_migrate_pages=112686`
+  - Random(`1`) `results/20260824_174027_slcpolicy1_random_zipf_nrm_rep2/`: `sum=180660`, `max=36`, `slc_migrate_pages=152216`
+  - FIFO(`2`) `results/20260824_174206_slcpolicy2_fifo_zipf_nrm_rep2/`: `sum=180608`, `max=21`, `slc_migrate_pages=120384`
+  - Cost-Benefit(`3`) `results/20260824_175416_slcpolicy3_costbenefit_zipf_nrm_rep2/`: `sum=180608`, `max=31`, `slc_migrate_pages=104229`
+  - baseline과 같은 방향으로 Random은 migration cost가 가장 높고, Cost-Benefit은 가장 낮다.
+  - `results/20260824_173844_slcpolicy1_random_zipf_nrm_rep2/`는 파일이 없는 빈 디렉터리라 중간 실패 흔적으로 본다.
+- 2026-08-24에 같은 조건으로 `zipf_nrm_rep2_rerun`도 로컬에서 네 정책 모두 완료됐다.
+  - Greedy(`0`) `results/20260824_223708_slcpolicy0_greedy_zipf_nrm_rep2_rerun/`: `sum=182804`, `max=45`, `slc_migrate_pages=113526`
+  - Random(`1`) `results/20260824_224519_slcpolicy1_random_zipf_nrm_rep2_rerun/`: `sum=182204`, `max=37`, `slc_migrate_pages=163745`
+  - FIFO(`2`) `results/20260824_225438_slcpolicy2_fifo_zipf_nrm_rep2_rerun/`: `sum=181648`, `max=21`, `slc_migrate_pages=128099`
+  - Cost-Benefit(`3`) `results/20260824_230218_slcpolicy3_costbenefit_zipf_nrm_rep2_rerun/`: `sum=182148`, `max=32`, `slc_migrate_pages=105106`
+- 2026-08-24에 유효한 `zipf_nrm_rep3` 네 정책도 완료됐다.
+  - Greedy(`0`) `results/20260824_232544_slcpolicy0_greedy_zipf_nrm_rep3/`: `sum=181416`, `max=43`, `slc_migrate_pages=113104`
+  - Random(`1`) `results/20260824_232938_slcpolicy1_random_zipf_nrm_rep3/`: `sum=181736`, `max=34`, `slc_migrate_pages=159498`
+  - FIFO(`2`) `results/20260824_233522_slcpolicy2_fifo_zipf_nrm_rep3/`: `sum=181420`, `max=21`, `slc_migrate_pages=126602`
+  - Cost-Benefit(`3`) `results/20260824_234119_slcpolicy3_costbenefit_zipf_nrm_rep3/`: `sum=182148`, `max=31`, `slc_migrate_pages=105195`
+  - baseline, `rep2`, `rep2_rerun`, `rep3` 4회 모두에서 `slc_migrate_pages` 순위는 `Cost-Benefit < Greedy < FIFO < Random`으로 유지됐다.
+  - `max`는 네 번 모두 FIFO(`2`)가 가장 낮았다.
+  - `results/20260824_223531_*`, `results/20260824_223532_*`, `results/20260824_223533_*`, `results/20260824_223543_*` 계열과 `results/20260824_231943_*`, `results/20260824_232208_*`, `results/20260824_232209_*`, `results/20260824_232225_*`는 비어 있거나 불완전한 실패 흔적이라 집계 대상이 아니다.
 
 ## 다음 세션 시작점
 
 - 다음 세션은 로컬 `~/nvmevirt`에서 시작하는 것을 우선으로 한다.
-- 시작 확인 순서는 `git status --short`, `ls results/local_* | tail`, `sed -n '1,220p' scripts/run_local_slc_policy_compare.sh` 정도면 충분하다.
-- 목표는 `zipf_nrm` 결과를 반복측정 또는 요약 자동화로 정리한 뒤, local-sized `hotcold v7` 비교 여부를 결정하는 것이다.
+- 시작 확인 순서는 `git status --short`, `./scripts/collect_summary.sh > /tmp/nvmevirt_summary.csv && rg 'zipf_nrm|slc_verify|hotcold' /tmp/nvmevirt_summary.csv | tail -20`, `sed -n '1,220p' scripts/run_experiment.sh` 정도면 충분하다.
+- 목표는 local-sized `hotcold v7` 1회 비교를 추가하고, `zipf_nrm` 4회 결과와 함께 정책별 요약 표를 만드는 것이다.
 
 ## 참고 문서
 
