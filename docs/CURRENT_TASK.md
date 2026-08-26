@@ -3,41 +3,71 @@
 ## 현재 흐름
 
 - 실습2 WIP는 commit `8aa39ca`로 로컬/원격에 반영됐다.
-- 핵심 변경 파일은 `conv_ftl.c`, `conv_ftl.h`, `main.c`, `ssd_config.h`이며, 실험 스크립트로 `scripts/run_local_slc_policy_compare.sh`, `scripts/run_experiment.sh`를 현재 실습2 의미에 맞게 정리 중이다.
-- 현재 코드는 SLC/TLC pool metadata, pool-aware write path, SLC migration 첫 연결, migration/TLC GC counter 분리, migration policy 분리까지 들어간 상태다.
+- 핵심 변경 파일은 `conv_ftl.c`, `conv_ftl.h`, `ssd.c`, `ssd.h`, `ssd_config.h`, `main.c`다.
+- 현재 코드는 SLC/TLC pool metadata, pool-aware write path, SLC migration 4정책, migration/TLC GC counter 분리, SLC/TLC oneshot/timing 분기, `slc_wp/tlc_wp/tlc_gc_wp` direct path, `slc_lm/tlc_lm` direct manager path까지 들어간 상태다.
 - 현재 worktree 기준 `SLC_CACHE_RATIO_PERCENT`는 `10`이라 SLC path가 컴파일 시 기본 활성이다.
-- 로컬 VM smoke test와 fresh reload 기반 4정책 비교에서 SLC write, SLC to TLC migration, TLC GC가 모두 실제로 발생하는 것까지 확인했다.
+- 2026-08-26 현재 worktree에는 `slc_cache_ratio_percent` insmod parameter가 추가돼, 같은 빌드 산출물로 `0`(TLC-only baseline)과 `10`(SLC cache on)을 런타임에 바꿔 실험할 수 있게 정리 중이다.
+- `/proc/nvmev/debug`에는 이제 `USER_*_SLC/TLC_PAGES`, `INTERNAL_*_SLC/TLC_PAGES`가 추가돼 SLC-only/overflow 검증에서 host/internal read/write가 어느 media로 갔는지 직접 확인할 수 있게 됐다.
+- `scripts/collect_summary.sh`는 이제 `slc_cache_ratio_percent`, `write_bw_kib`, `write_iops`, `read_bw_kib`, `read_iops`, read/write latency를 함께 CSV로 모은다.
+- 새 로컬 검증 스크립트 `scripts/run_local_slc_validation.sh`가 추가됐다. `baseline`, `slc_only`, `overflow`, `all` 모드로 1번 결과물용 실험을 바로 돌리도록 만든 상태다.
+- 로컬 VM 기준 `make`, smoke, CRC verify, `zipf_nrm`, `hotcold_v7_local_fix2`까지 사용자 확인으로 정상 수행됐다.
 - 서버 저장소 `~/nvmevirt`도 `practice2-slc-cache` 브랜치의 `8aa39ca`까지 동기화돼 있지만, 현재는 서버 이슈 때문에 로컬 우선으로 진행한다.
+- 최종 보고서용 실측값은 서버에서 다시 수집해야 한다. 로컬 VM 결과는 스크립트/계측 검증과 방향 확인용으로만 취급한다.
+- 2026-08-26 현재는 서버 접속/실행이 불안정해서, 오늘은 로컬 검증까지만 진행하고 서버 실측 재수집은 2026-08-27에 다시 시도하는 전제로 움직인다.
 
 ## 다음에 바로 할 일
 
-1. local-sized `hotcold v7`를 policy별 1회씩 돌려 `zipf_nrm`과 방향성이 같은지 본다.
-2. `zipf_nrm` 4회분과 `hotcold v7`를 함께 요약해 정책별 장단점을 표로 정리한다.
-3. 이후 SLC/TLC timing 분리와 legacy write path 정리로 다시 돌아간다.
+1. 오늘(2026-08-26)은 로컬 검증 스크립트와 집계 스크립트가 정상 동작하는지만 확인한다.
+2. 내일(2026-08-27) 서버에서 새 코드로 `make` 후 baseline(`slc_cache_ratio_percent=0`)과 SLC-on(`10`) 실험을 다시 돌려 1번 결과물용 실측값을 확보한다.
+3. 내일(2026-08-27) 서버에서 `SLC-only` / `overflow` 검증을 돌려 `USER_*_PAGES`, `INTERNAL_*_PAGES` 기준 정상동작 증거를 확보한다.
+4. 서버에서 정책 비교 workload도 다시 돌린 뒤 `./scripts/collect_summary.sh > /tmp/nvmevirt_summary.csv`로 throughput/iops 포함 CSV를 모은다.
+5. 그 다음 서버 실측값 기준으로 표와 본문을 정리한다.
 
 ## 미구현 핵심 항목
 
-- local-sized `hotcold v7` 정책 비교
-- SLC/TLC read-write timing 분리
-- SLC/TLC `oneshot page size` 차이 반영
-- read path timing 분리
+- 서버 baseline(`slc_cache_ratio_percent=0`) vs SLC-on 실측 run
+- 서버 `SLC-only` / `overflow` 검증 실측 run
+- 결과 표/본문 정리
+- 필요 시 `TLC_GC_CNT > 0` workload 추가
+- 필요 시 line metadata 저장소 분리
 
 ## 주의할 점
 
 - 현재 기본 `SLC_CACHE_RATIO_PERCENT`는 `10`이다.
+- 현재 내 shell에서는 `make`가 안 잡혀서 새 코드를 직접 빌드/실행하지는 못했다. 다음 실행 전에는 빌드 가능한 환경인지 먼저 확인해야 한다.
 - `echo reset > /proc/nvmev/debug`는 counter만 초기화하고 FTL state는 초기화하지 않는다.
 - 정책 비교는 반드시 `umount -> rmmod -> insmod -> mkfs -> mount`의 fresh reload 조건으로 수행한다.
-- 로컬 VM은 용량이 작아 `No space left on device` 같은 파일시스템 노이즈가 섞이기 쉽다. 정책 비교는 서버 우선으로 진행한다.
+- 로컬 VM은 용량이 작아 `No space left on device` 같은 파일시스템 노이즈가 섞이기 쉽다. 최종 실측과 결과 표는 서버 결과만 기준으로 쓴다.
+- `scripts/run_local_slc_validation.sh`는 `SLC_RATIO_OFF=0`, `SLC_RATIO_ON=10`을 기본으로 baseline/validation을 구성한다. `OVERFLOW_SIZE`가 너무 작아 migration이 안 보이면 더 키워야 한다.
 - 로컬 `zipf_nrm` 재실행은 `RANDOM_DIST=zipf:1.2 NORANDOMMAP=1 UNIFORM_SIZE=600M UNIFORM_LOOPS=10 TLC_GC_POLICY=0`를 반드시 명시한다. 빠뜨리면 기본 `uniform 600M x 250`가 돌아간다.
 - 로컬에서 정책별 `for` 루프를 돌릴 때 VS Code Remote가 끊기면 대개 `umount/rmmod/insmod/mkfs/mount` 재초기화 경계 문제라서 `tmux` 안에서 실행하는 편이 안전하다.
-- 실제 I/O는 아직 legacy `lm/wp/gc_wp`를 많이 공유한다.
+- active I/O path는 `slc_wp/tlc_wp/tlc_gc_wp`와 `slc_lm/tlc_lm` 기준으로 나뉘었지만, line metadata 저장소는 아직 `conv_ftl->lines` 하나를 공유한다.
 - `gc_policy`는 TLC GC 전용 의미로 유지되고, `slc_migration_policy`가 별도로 추가됐다.
+- 현재 결과 대부분은 `TLC_GC_CNT=0`이라 사실상 SLC migration policy 비교로 읽어야 한다.
 - 실습1의 heap staleness 교훈은 migration Cost-Benefit에도 그대로 다시 검토해야 한다.
 
-## 오늘 확인한 결과
+## 최신 검증 요약
 
-- 로컬 environment에서 `make`는 사용 가능했고, 사용자는 로컬 VM에서 smoke test와 fresh reload 기반 4정책 비교를 직접 완료했다.
-- smoke test는 저장 파일이 남진 않았지만, 기존과 같은 방향으로 SLC migration/TLC GC가 실제로 도는 것을 확인했다.
+- 로컬 VM에서 `make` 정상 동작 확인.
+- `./scripts/run_local_slc_policy_compare.sh verify 0/1/2/3` 새 run 4개 모두 통과.
+  - `results/local_20260825_170050_slc_verify_policy0/`
+  - `results/local_20260825_170446_slc_verify_policy1/`
+  - `results/local_20260825_172028_slc_verify_policy2/`
+  - `results/local_20260825_172411_slc_verify_policy3/`
+  - 각 `fio.json`의 `error=0`, `meta.txt`의 `verify_status=pass`
+- 예전 빈 verify 실패 흔적 `results/local_20260823_232719_slc_verify_policy2/`, `results/local_20260823_232711_slc_verify_policy2/`는 삭제했다.
+- `hotcold_v7_local_fix2` 4정책도 완료했고, 현재 가장 최신 비교 세트는 이것이다.
+  - 공통 조건: `COLD_SIZE=512M`, `COLD_TOUCH_SIZE=256M`, `HOT_SIZE=64M`, `HOTCOLD_RUNTIME=60`, `TLC_GC_POLICY=0`
+  - Greedy(`0`) `results/20260825_173008_slcpolicy0_greedy_hotcold_v7_local_fix2/`: `sum=203816`, `max=24`, `slc_migrate_pages=621486`
+  - Random(`1`) `results/20260825_173122_slcpolicy1_random_hotcold_v7_local_fix2/`: `sum=204448`, `max=29`, `slc_migrate_pages=833622`
+  - FIFO(`2`) `results/20260825_173309_slcpolicy2_fifo_hotcold_v7_local_fix2/`: `sum=174796`, `max=14`, `slc_migrate_pages=537958`
+  - Cost-Benefit(`3`) `results/20260825_173433_slcpolicy3_costbenefit_hotcold_v7_local_fix2/`: `sum=189400`, `max=20`, `slc_migrate_pages=573157`
+  - `slc_migrate_pages` 순위는 `FIFO < Cost-Benefit < Greedy < Random`
+  - `max`는 이번에도 FIFO(`2`)가 최소
+  - `tlc_gc_cnt`는 네 정책 모두 `0`
+
+## 이전 핵심 결과
+
 - 4정책 비교 결과는 `results/local_20260823_212734_slc_policy_compare/`에 저장됐다.
   - policy `0` Greedy:
     - `TLC_GC_CNT 15540`
@@ -120,12 +150,41 @@
   - baseline, `rep2`, `rep2_rerun`, `rep3` 4회 모두에서 `slc_migrate_pages` 순위는 `Cost-Benefit < Greedy < FIFO < Random`으로 유지됐다.
   - `max`는 네 번 모두 FIFO(`2`)가 가장 낮았다.
   - `results/20260824_223531_*`, `results/20260824_223532_*`, `results/20260824_223533_*`, `results/20260824_223543_*` 계열과 `results/20260824_231943_*`, `results/20260824_232208_*`, `results/20260824_232209_*`, `results/20260824_232225_*`는 비어 있거나 불완전한 실패 흔적이라 집계 대상이 아니다.
+- 2026-08-25에 local-sized `hotcold v7` 4정책 1회도 완료했다.
+  - 공통 조건: `COLD_SIZE=512M`, `COLD_TOUCH_SIZE=256M`, `HOT_SIZE=64M`, `HOTCOLD_RUNTIME=60`, `TLC_GC_POLICY=0`
+  - Greedy(`0`) `results/20260825_160146_slcpolicy0_greedy_hotcold_v7_local/`: `sum=166664`, `max=38`, `slc_migrate_pages=859714`
+  - Random(`1`) `results/20260825_160313_slcpolicy1_random_hotcold_v7_local/`: `sum=164660`, `max=26`, `slc_migrate_pages=694948`
+  - FIFO(`2`) `results/20260825_160454_slcpolicy2_fifo_hotcold_v7_local/`: `sum=186236`, `max=15`, `slc_migrate_pages=598783`
+  - Cost-Benefit(`3`) `results/20260825_160728_slcpolicy3_costbenefit_hotcold_v7_local/`: `sum=182388`, `max=41`, `slc_migrate_pages=934689`
+  - 이번 `slc_migrate_pages` 순위는 `FIFO < Random < Greedy < Cost-Benefit`이라 `zipf_nrm`과 달랐다.
+  - 1차 원인 후보는 `[scripts/workloads/hotcold.fio]`의 `cold_touch` 뒤 `stonewall`이다. 파일상 v7 설명은 병렬 churn인데 실제 정의는 `cold_fill -> cold_touch -> hot_churn` 직렬 실행처럼 보인다.
+  - `fio.json`에서도 Greedy/Random/Cost-Benefit은 aggregate `job_runtime`이 약 `120000 ms`, FIFO는 `201699 ms`까지 늘어, "60초 병렬 churn" 가정보다 직렬/비대칭 실행 쪽 해석이 더 맞다.
+- 위 문제를 수정하려고 `[scripts/workloads/hotcold.fio]`에서 `cold_touch` 뒤 `stonewall`을 제거했고, `hotcold_v7_local_fix1` 4정책을 다시 수행했다.
+  - Greedy(`0`) `results/20260825_162504_slcpolicy0_greedy_hotcold_v7_local_fix1/`: `sum=175592`, `max=21`, `slc_migrate_pages=545773`
+  - Random(`1`) `results/20260825_162633_slcpolicy1_random_hotcold_v7_local_fix1/`: `sum=175500`, `max=30`, `slc_migrate_pages=723055`
+  - FIFO(`2`) `results/20260825_162900_slcpolicy2_fifo_hotcold_v7_local_fix1/`: `sum=178064`, `max=14`, `slc_migrate_pages=543900`
+  - Cost-Benefit(`3`) `results/20260825_163008_slcpolicy3_costbenefit_hotcold_v7_local_fix1/`: `sum=175692`, `max=19`, `slc_migrate_pages=534360`
+  - 수정 후 `slc_migrate_pages` 순위는 `Cost-Benefit < FIFO < Greedy < Random`으로 바뀌었고, `zipf_nrm`의 큰 방향(`Cost-Benefit` 최저, `Random` 최고)과 일치했다.
+  - `max`는 이번에도 FIFO(`2`)가 가장 낮았다.
+  - 따라서 최종 비교에는 `*hotcold_v7_local_fix1*`만 사용하고, 첫 `*hotcold_v7_local*` run은 `stonewall` 버그가 섞인 참고용 흔적으로만 둔다.
+- 2026-08-25에 SLC/TLC별 oneshot/timing 분기도 코드에 추가했다.
+  - `[ssd_config.h]`에 `SLC_ONESHOT_PAGE_SIZE`, `TLC_ONESHOT_PAGE_SIZE`, SLC read/write latency 기본값을 추가했다.
+  - `[ssd.h]`, `[ssd.c]`에 `nand_cmd.media`, `slc_pgs_per_oneshotpg`, `slc_pg_*_lat`를 추가해 SLC/TLC NAND timing을 분기했다.
+  - `[conv_ftl.c]`에서 `last_pg_in_wordline()`, write pointer 전진, host write NAND 발행 크기, migration/GC read-write, host read NAND timing이 SLC/TLC pool에 따라 다른 oneshot/timing을 타도록 바꿨다.
+- 같은 날 active I/O path의 legacy `wp/gc_wp` 의존도 제거했다.
+  - `[conv_ftl.h]`에서 legacy `wp`, `gc_wp` 필드를 제거했다.
+  - `[conv_ftl.c]`의 `__get_wp()`는 이제 host write를 `slc_wp` 또는 `tlc_wp`, migration/GC write를 `tlc_gc_wp`로 직접 매핑한다.
+  - 즉 host/migration write pointer 경로는 이제 `slc_rt` 구조를 직접 사용한다.
+- 같은 날 free/full/victim manager도 pool별로 직접 분리했다.
+  - `[conv_ftl.h]`에서 shared `line_mgmt lm`를 제거하고, top-level에는 `conv_ftl->lines` 배열만 남겼다.
+  - `[conv_ftl.c]`의 victim 선택, free line 할당, line close, invalidation, free 반환은 이제 `slc_lm` 또는 `tlc_lm`의 list/PQ/count를 직접 사용한다.
+  - 즉 active manager state는 `slc_lm/tlc_lm`로 넘어갔고, 남은 공유 상태는 line metadata 배열 자체다.
 
 ## 다음 세션 시작점
 
 - 다음 세션은 로컬 `~/nvmevirt`에서 시작하는 것을 우선으로 한다.
-- 시작 확인 순서는 `git status --short`, `./scripts/collect_summary.sh > /tmp/nvmevirt_summary.csv && rg 'zipf_nrm|slc_verify|hotcold' /tmp/nvmevirt_summary.csv | tail -20`, `sed -n '1,220p' scripts/run_experiment.sh` 정도면 충분하다.
-- 목표는 local-sized `hotcold v7` 1회 비교를 추가하고, `zipf_nrm` 4회 결과와 함께 정책별 요약 표를 만드는 것이다.
+- 시작 확인 순서는 `git status --short`, `ls -td results/*hotcold_v7_local_fix2* | head`, `sed -n '1,220p' docs/CURRENT_TASK.md`, `sed -n '1,220p' scripts/run_experiment.sh` 정도면 충분하다.
+- 목표는 `zipf_nrm` 4회분과 `hotcold_v7_local_fix2`를 묶어 최종 비교 표와 본문을 만드는 것이다.
 
 ## 참고 문서
 

@@ -13,6 +13,7 @@ MEMMAP_SIZE="${MEMMAP_SIZE:-1G}"
 NVME_CPUS="${NVME_CPUS:-2,3}"
 MOUNT_DIR="${MOUNT_DIR:-$HOME/nvme_mount}"
 TLC_GC_POLICY="${TLC_GC_POLICY:-0}"
+SLC_CACHE_RATIO_PERCENT="${SLC_CACHE_RATIO_PERCENT:-10}"
 
 SMOKE_SIZE="${SMOKE_SIZE:-128M}"
 SMOKE_LOOPS="${SMOKE_LOOPS:-20}"
@@ -41,6 +42,7 @@ Environment overrides:
   NVME_CPUS        default: 2,3
   MOUNT_DIR        default: $HOME/nvme_mount
   TLC_GC_POLICY    default: 0
+  SLC_CACHE_RATIO_PERCENT default: 10
   SMOKE_SIZE       default: 128M
   SMOKE_LOOPS      default: 20
   COMPARE_SIZE     default: 600M
@@ -73,7 +75,8 @@ reload_module() {
     memmap_size="$MEMMAP_SIZE" \
     cpus="$NVME_CPUS" \
     gc_policy="$TLC_GC_POLICY" \
-    slc_migration_policy="$slc_policy"
+    slc_migration_policy="$slc_policy" \
+    slc_cache_ratio_percent="$SLC_CACHE_RATIO_PERCENT"
 
   require_block_device
 
@@ -115,7 +118,7 @@ run_smoke() {
   cleanup_mount
 
   echo "result_dir=$outdir"
-  rg 'SLC_MIGRATION_CNT|SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT|TLC_GC_CNT|TLC_GC_VALID_PAGE_MIGRATE_CNT|DIAG_' \
+  rg 'SLC_MIGRATION_CNT|SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT|TLC_GC_CNT|TLC_GC_VALID_PAGE_MIGRATE_CNT|USER_.*_PAGES|INTERNAL_.*_PAGES|DIAG_' \
     "$outdir/debug.txt" || true
 }
 
@@ -151,7 +154,7 @@ run_compare() {
   echo "result_dir=$outdir"
   for policy in 0 1 2 3; do
     echo "== policy $policy =="
-    rg 'SLC_MIGRATION_CNT|SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT|TLC_GC_CNT|TLC_GC_VALID_PAGE_MIGRATE_CNT|DIAG_' \
+    rg 'SLC_MIGRATION_CNT|SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT|TLC_GC_CNT|TLC_GC_VALID_PAGE_MIGRATE_CNT|USER_.*_PAGES|INTERNAL_.*_PAGES|DIAG_' \
       "$outdir/debug_policy${policy}.txt" || true
   done
 }
@@ -198,12 +201,13 @@ run_verify() {
     echo "memmap_size=$MEMMAP_SIZE"
     echo "cpus=$NVME_CPUS"
     echo "tlc_gc_policy=$TLC_GC_POLICY"
+    echo "slc_cache_ratio_percent=$SLC_CACHE_RATIO_PERCENT"
     echo "verify_status=pass"
   } > "$outdir/meta.txt"
   cleanup_mount
 
   echo "result_dir=$outdir"
-  rg 'SLC_MIGRATION_CNT|SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT|TLC_GC_CNT|TLC_GC_VALID_PAGE_MIGRATE_CNT|DIAG_' \
+  rg 'SLC_MIGRATION_CNT|SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT|TLC_GC_CNT|TLC_GC_VALID_PAGE_MIGRATE_CNT|USER_.*_PAGES|INTERNAL_.*_PAGES|DIAG_' \
     "$outdir/debug.txt" || true
 }
 

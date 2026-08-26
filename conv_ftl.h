@@ -13,6 +13,14 @@ extern uint64_t tlc_gc_cnt;
 extern uint64_t tlc_gc_valid_page_migrate_cnt;
 extern uint64_t slc_migration_cnt;
 extern uint64_t slc_migration_valid_page_migrate_cnt;
+extern uint64_t user_read_slc_pages;
+extern uint64_t user_read_tlc_pages;
+extern uint64_t user_write_slc_pages;
+extern uint64_t user_write_tlc_pages;
+extern uint64_t internal_read_slc_pages;
+extern uint64_t internal_read_tlc_pages;
+extern uint64_t internal_write_slc_pages;
+extern uint64_t internal_write_tlc_pages;
 
 /* GC victim divergence analysis (2026-07-30): see diag_scan_greedy_vs_cb()
  * in conv_ftl.c. */
@@ -64,9 +72,6 @@ struct write_pointer {
 };
 
 struct line_mgmt {
-	struct line *lines;
-
-	/* free line list, we only need to maintain a list of blk numbers */
 	struct list_head free_line_list;
 	pqueue_t *victim_line_pq;
 	struct list_head full_line_list;
@@ -105,14 +110,7 @@ struct conv_ftl {
 	struct convparams cp;
 	struct ppa *maptbl; /* page level mapping table */
 	uint64_t *rmap; /* reverse mapptbl, assume it's stored in OOB */
-	struct write_pointer wp;
-	struct write_pointer gc_wp;
-	struct line_mgmt lm;
-	/*
-	 * Practice 2 is migrating toward separate SLC/TLC managers and write
-	 * pointers. Keep the legacy single-pool fields above alive until the
-	 * actual I/O path switches over in later steps.
-	 */
+	struct line *lines;
 	struct slc_cache_layout slc_layout;
 	struct slc_cache_runtime slc_rt;
 	struct write_flow_control wfc;

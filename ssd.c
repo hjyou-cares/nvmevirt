@@ -95,14 +95,20 @@ void ssd_init_params(struct ssdparams *spp, uint64_t capacity, uint32_t nparts)
 								  spp->luns_per_ch * spp->nchs);
 	}
 
-	NVMEV_ASSERT((ONESHOT_PAGE_SIZE % spp->pgsz) == 0 && (FLASH_PAGE_SIZE % spp->pgsz) == 0);
-	NVMEV_ASSERT((ONESHOT_PAGE_SIZE % FLASH_PAGE_SIZE) == 0);
+	NVMEV_ASSERT((TLC_ONESHOT_PAGE_SIZE % spp->pgsz) == 0 &&
+		     (FLASH_PAGE_SIZE % spp->pgsz) == 0);
+	NVMEV_ASSERT((TLC_ONESHOT_PAGE_SIZE % FLASH_PAGE_SIZE) == 0);
+	NVMEV_ASSERT((SLC_ONESHOT_PAGE_SIZE % spp->pgsz) == 0);
+	NVMEV_ASSERT((TLC_ONESHOT_PAGE_SIZE % spp->pgsz) == 0);
+	NVMEV_ASSERT((TLC_ONESHOT_PAGE_SIZE % FLASH_PAGE_SIZE) == 0);
 
-	spp->pgs_per_oneshotpg = ONESHOT_PAGE_SIZE / (spp->pgsz);
-	spp->oneshotpgs_per_blk = DIV_ROUND_UP(blk_size, ONESHOT_PAGE_SIZE);
+	spp->pgs_per_oneshotpg = TLC_ONESHOT_PAGE_SIZE / (spp->pgsz);
+	spp->slc_pgs_per_oneshotpg = SLC_ONESHOT_PAGE_SIZE / (spp->pgsz);
+	spp->oneshotpgs_per_blk = DIV_ROUND_UP(blk_size, TLC_ONESHOT_PAGE_SIZE);
 
 	spp->pgs_per_flashpg = FLASH_PAGE_SIZE / (spp->pgsz);
-	spp->flashpgs_per_blk = (ONESHOT_PAGE_SIZE / FLASH_PAGE_SIZE) * spp->oneshotpgs_per_blk;
+	spp->flashpgs_per_blk =
+		(TLC_ONESHOT_PAGE_SIZE / FLASH_PAGE_SIZE) * spp->oneshotpgs_per_blk;
 
 	spp->pgs_per_blk = spp->pgs_per_oneshotpg * spp->oneshotpgs_per_blk;
 
@@ -115,6 +121,9 @@ void ssd_init_params(struct ssdparams *spp, uint64_t capacity, uint32_t nparts)
 	spp->pg_rd_lat[CELL_TYPE_MSB] = NAND_READ_LATENCY_MSB;
 	spp->pg_rd_lat[CELL_TYPE_CSB] = NAND_READ_LATENCY_CSB;
 	spp->pg_wr_lat = NAND_PROG_LATENCY;
+	spp->slc_pg_4kb_rd_lat = SLC_NAND_4KB_READ_LATENCY;
+	spp->slc_pg_rd_lat = SLC_NAND_READ_LATENCY;
+	spp->slc_pg_wr_lat = SLC_NAND_PROG_LATENCY;
 	spp->blk_er_lat = NAND_ERASE_LATENCY;
 	spp->max_ch_xfer_size = MAX_CH_XFER_SIZE;
 
@@ -169,6 +178,28 @@ void ssd_init_params(struct ssdparams *spp, uint64_t capacity, uint32_t nparts)
 		spp->tt_lines, BYTE_TO_MB(spp->pgs_per_blk * spp->pgsz),
 		BYTE_TO_KB(spp->pgs_per_blk * spp->pgsz), BYTE_TO_MB(spp->pgs_per_line * spp->pgsz),
 		BYTE_TO_KB(spp->pgs_per_line * spp->pgsz));
+}
+
+static inline uint64_t get_nand_read_latency(struct ssdparams *spp, struct nand_cmd *ncmd,
+					     uint32_t cell)
+{
+	if (ncmd->media == NAND_MEDIA_SLC) {
+		if (ncmd->xfer_size == 4096)
+			return spp->slc_pg_4kb_rd_lat;
+		return spp->slc_pg_rd_lat;
+	}
+
+	if (ncmd->xfer_size == 4096)
+		return spp->pg_4kb_rd_lat[cell];
+	return spp->pg_rd_lat[cell];
+}
+
+static inline uint64_t get_nand_write_latency(struct ssdparams *spp, struct nand_cmd *ncmd)
+{
+	if (ncmd->media == NAND_MEDIA_SLC)
+		return spp->slc_pg_wr_lat;
+
+	return spp->pg_wr_lat;
 }
 
 static void ssd_init_nand_page(struct nand_page *pg, struct ssdparams *spp)
@@ -390,12 +421,7 @@ uint64_t ssd_advance_nand(struct ssd *ssd, struct nand_cmd *ncmd)
 	case NAND_READ:
 		/* read: perform NAND cmd first */
 		nand_stime = max(lun->next_lun_avail_time, cmd_stime);
-
-		if (ncmd->xfer_size == 4096) {
-			nand_etime = nand_stime + spp->pg_4kb_rd_lat[cell];
-		} else {
-			nand_etime = nand_stime + spp->pg_rd_lat[cell];
-		}
+		nand_etime = nand_stime + get_nand_read_latency(spp, ncmd, cell);
 
 		/* read: then data transfer through channel */
 		chnl_stime = nand_etime;
@@ -425,7 +451,7 @@ uint64_t ssd_advance_nand(struct ssd *ssd, struct nand_cmd *ncmd)
 
 		/* write: then do NAND program */
 		nand_stime = chnl_etime;
-		nand_etime = nand_stime + spp->pg_wr_lat;
+		nand_etime = nand_stime + get_nand_write_latency(spp, ncmd);
 		lun->next_lun_avail_time = nand_etime;
 		completed_time = nand_etime;
 		break;

@@ -40,6 +40,11 @@ module_param(slc_migration_policy, uint, 0444);
 MODULE_PARM_DESC(slc_migration_policy,
 		 "SLC migration victim selection policy: 0=Greedy, 1=Random, 2=FIFO, 3=Cost-Benefit");
 
+static unsigned int slc_cache_ratio_percent = SLC_CACHE_RATIO_PERCENT;
+module_param(slc_cache_ratio_percent, uint, 0444);
+MODULE_PARM_DESC(slc_cache_ratio_percent,
+		 "SLC cache ratio percent: 0 disables SLC cache, 100 means all lines are SLC");
+
 /* logical clock for Cost-Benefit GC: incremented once per page write.
  * Only ever touched from the single nvmev_dispatcher kthread, so no locking needed. */
 static uint64_t cb_clock = 0;
@@ -53,6 +58,14 @@ uint64_t tlc_gc_cnt = 0;
 uint64_t tlc_gc_valid_page_migrate_cnt = 0;
 uint64_t slc_migration_cnt = 0;
 uint64_t slc_migration_valid_page_migrate_cnt = 0;
+uint64_t user_read_slc_pages = 0;
+uint64_t user_read_tlc_pages = 0;
+uint64_t user_write_slc_pages = 0;
+uint64_t user_write_tlc_pages = 0;
+uint64_t internal_read_slc_pages = 0;
+uint64_t internal_read_tlc_pages = 0;
+uint64_t internal_write_slc_pages = 0;
+uint64_t internal_write_tlc_pages = 0;
 
 /* GC victim divergence analysis (2026-07-30). Regardless of which gc_policy is
  * actually driving real GC, scan the raw victim queue on every
@@ -80,7 +93,15 @@ enum reclaim_reason {
 static inline bool last_pg_in_wordline(struct conv_ftl *conv_ftl, struct ppa *ppa)
 {
 	struct ssdparams *spp = &conv_ftl->ssd->sp;
-	return (ppa->g.pg % spp->pgs_per_oneshotpg) == (spp->pgs_per_oneshotpg - 1);
+	uint32_t oneshot_pgs;
+
+	if (conv_ftl->slc_layout.slc_line_cnt > 0 &&
+	    ppa->g.blk < conv_ftl->slc_layout.slc_line_boundary)
+		oneshot_pgs = spp->slc_pgs_per_oneshotpg;
+	else
+		oneshot_pgs = spp->pgs_per_oneshotpg;
+
+	return (ppa->g.pg % oneshot_pgs) == (oneshot_pgs - 1);
 }
 
 static bool should_gc(struct conv_ftl *conv_ftl)
@@ -240,7 +261,7 @@ static inline void consume_write_credit(struct conv_ftl *conv_ftl)
 static void foreground_gc(struct conv_ftl *conv_ftl);
 static void foreground_slc_migration(struct conv_ftl *conv_ftl);
 static enum line_pool_id get_configured_line_pool(struct conv_ftl *conv_ftl, uint32_t line_id);
-static void inc_pool_free_line_cnt(struct conv_ftl *conv_ftl, struct line *line);
+static struct line_mgmt *get_pool_lm(struct conv_ftl *conv_ftl, enum line_pool_id pool);
 static int do_gc(struct conv_ftl *conv_ftl, bool force);
 
 static inline void check_and_refill_write_credit(struct conv_ftl *conv_ftl)
@@ -256,24 +277,37 @@ static inline void check_and_refill_write_credit(struct conv_ftl *conv_ftl)
 static void init_lines(struct conv_ftl *conv_ftl)
 {
 	struct ssdparams *spp = &conv_ftl->ssd->sp;
-	struct line_mgmt *lm = &conv_ftl->lm;
+	struct line_mgmt *slc_lm = &conv_ftl->slc_rt.slc_lm;
+	struct line_mgmt *tlc_lm = &conv_ftl->slc_rt.tlc_lm;
+	struct line_mgmt *pool_lm;
 	struct line *line;
 	int i;
 
-	lm->tt_lines = spp->blks_per_pl;
-	NVMEV_ASSERT(lm->tt_lines == spp->tt_lines);
-	lm->lines = vmalloc(sizeof(struct line) * lm->tt_lines);
+	NVMEV_ASSERT(spp->tt_lines == conv_ftl->slc_layout.total_line_cnt);
+	conv_ftl->lines = vmalloc(sizeof(struct line) * spp->tt_lines);
 
-	INIT_LIST_HEAD(&lm->free_line_list);
-	INIT_LIST_HEAD(&lm->full_line_list);
+	INIT_LIST_HEAD(&slc_lm->free_line_list);
+	INIT_LIST_HEAD(&slc_lm->full_line_list);
+	INIT_LIST_HEAD(&tlc_lm->free_line_list);
+	INIT_LIST_HEAD(&tlc_lm->full_line_list);
+	slc_lm->victim_line_pq = slc_lm->tt_lines ?
+		pqueue_init(slc_lm->tt_lines, victim_line_cmp_pri, victim_line_get_pri,
+			    victim_line_set_pri, victim_line_get_pos, victim_line_set_pos) :
+		NULL;
+	tlc_lm->victim_line_pq = tlc_lm->tt_lines ?
+		pqueue_init(tlc_lm->tt_lines, victim_line_cmp_pri, victim_line_get_pri,
+			    victim_line_set_pri, victim_line_get_pos, victim_line_set_pos) :
+		NULL;
 
-	lm->victim_line_pq = pqueue_init(spp->tt_lines, victim_line_cmp_pri, victim_line_get_pri,
-					 victim_line_set_pri, victim_line_get_pos,
-					 victim_line_set_pos);
+	slc_lm->free_line_cnt = 0;
+	slc_lm->victim_line_cnt = 0;
+	slc_lm->full_line_cnt = 0;
+	tlc_lm->free_line_cnt = 0;
+	tlc_lm->victim_line_cnt = 0;
+	tlc_lm->full_line_cnt = 0;
 
-	lm->free_line_cnt = 0;
-	for (i = 0; i < lm->tt_lines; i++) {
-		lm->lines[i] = (struct line){
+	for (i = 0; i < spp->tt_lines; i++) {
+		conv_ftl->lines[i] = (struct line){
 			.id = i,
 			.ipc = 0,
 			.vpc = 0,
@@ -281,18 +315,15 @@ static void init_lines(struct conv_ftl *conv_ftl)
 			.pool = get_configured_line_pool(conv_ftl, i),
 			.mtime = 0,
 			.close_seq = 0,
-			.entry = LIST_HEAD_INIT(lm->lines[i].entry),
+			.entry = LIST_HEAD_INIT(conv_ftl->lines[i].entry),
 		};
+		line = &conv_ftl->lines[i];
+		pool_lm = get_pool_lm(conv_ftl, line->pool);
 
 		/* initialize all the lines as free lines */
-		list_add_tail(&lm->lines[i].entry, &lm->free_line_list);
-		lm->free_line_cnt++;
-		inc_pool_free_line_cnt(conv_ftl, &lm->lines[i]);
+		list_add_tail(&line->entry, &pool_lm->free_line_list);
+		pool_lm->free_line_cnt++;
 	}
-
-	NVMEV_ASSERT(lm->free_line_cnt == lm->tt_lines);
-	lm->victim_line_cnt = 0;
-	lm->full_line_cnt = 0;
 }
 
 static void init_slc_layout_metadata(struct conv_ftl *conv_ftl)
@@ -300,8 +331,9 @@ static void init_slc_layout_metadata(struct conv_ftl *conv_ftl)
 	struct ssdparams *spp = &conv_ftl->ssd->sp;
 	struct slc_cache_layout *layout = &conv_ftl->slc_layout;
 
-	layout->slc_ratio_percent = SLC_CACHE_RATIO_PERCENT;
 	layout->total_line_cnt = spp->tt_lines;
+	NVMEV_ASSERT(slc_cache_ratio_percent <= 100);
+	layout->slc_ratio_percent = slc_cache_ratio_percent;
 	layout->slc_line_cnt = (layout->total_line_cnt * layout->slc_ratio_percent) / 100;
 	layout->tlc_line_cnt = layout->total_line_cnt - layout->slc_line_cnt;
 	layout->slc_line_boundary = layout->slc_line_cnt;
@@ -318,8 +350,11 @@ static void init_slc_layout_metadata(struct conv_ftl *conv_ftl)
 
 static void remove_lines(struct conv_ftl *conv_ftl)
 {
-	pqueue_free(conv_ftl->lm.victim_line_pq);
-	vfree(conv_ftl->lm.lines);
+	if (conv_ftl->slc_rt.slc_lm.victim_line_pq)
+		pqueue_free(conv_ftl->slc_rt.slc_lm.victim_line_pq);
+	if (conv_ftl->slc_rt.tlc_lm.victim_line_pq)
+		pqueue_free(conv_ftl->slc_rt.tlc_lm.victim_line_pq);
+	vfree(conv_ftl->lines);
 }
 
 static void init_write_flow_control(struct conv_ftl *conv_ftl)
@@ -334,6 +369,49 @@ static void init_write_flow_control(struct conv_ftl *conv_ftl)
 static inline void check_addr(int a, int max)
 {
 	NVMEV_ASSERT(a >= 0 && a < max);
+}
+
+static inline void count_media_reads(uint32_t io_type, int media, uint64_t pages)
+{
+	if (!pages)
+		return;
+
+	if (io_type == USER_IO) {
+		if (media == NAND_MEDIA_SLC)
+			user_read_slc_pages += pages;
+		else
+			user_read_tlc_pages += pages;
+		return;
+	}
+
+	if (media == NAND_MEDIA_SLC)
+		internal_read_slc_pages += pages;
+	else
+		internal_read_tlc_pages += pages;
+}
+
+static inline void count_media_writes(uint32_t io_type, int media, uint64_t pages)
+{
+	if (!pages)
+		return;
+
+	if (io_type == USER_IO) {
+		if (media == NAND_MEDIA_SLC)
+			user_write_slc_pages += pages;
+		else
+			user_write_tlc_pages += pages;
+		return;
+	}
+
+	if (media == NAND_MEDIA_SLC)
+		internal_write_slc_pages += pages;
+	else
+		internal_write_tlc_pages += pages;
+}
+
+static inline uint32_t get_total_free_line_cnt(struct conv_ftl *conv_ftl)
+{
+	return conv_ftl->slc_rt.slc_lm.free_line_cnt + conv_ftl->slc_rt.tlc_lm.free_line_cnt;
 }
 
 static enum line_pool_id get_configured_line_pool(struct conv_ftl *conv_ftl, uint32_t line_id)
@@ -361,7 +439,28 @@ static inline bool ppa_is_slc(struct conv_ftl *conv_ftl, struct ppa *ppa)
 	return get_ppa_pool(conv_ftl, ppa) == LINE_POOL_SLC;
 }
 
-static struct line_mgmt *get_pool_free_lm(struct conv_ftl *conv_ftl, enum line_pool_id pool)
+static inline uint32_t get_pool_pgs_per_oneshotpg(struct conv_ftl *conv_ftl,
+						  enum line_pool_id pool)
+{
+	struct ssdparams *spp = &conv_ftl->ssd->sp;
+
+	if (pool == LINE_POOL_SLC)
+		return spp->slc_pgs_per_oneshotpg;
+
+	return spp->pgs_per_oneshotpg;
+}
+
+static inline uint32_t get_ppa_pgs_per_oneshotpg(struct conv_ftl *conv_ftl, struct ppa *ppa)
+{
+	return get_pool_pgs_per_oneshotpg(conv_ftl, get_ppa_pool(conv_ftl, ppa));
+}
+
+static inline int get_ppa_nand_media(struct conv_ftl *conv_ftl, struct ppa *ppa)
+{
+	return ppa_is_slc(conv_ftl, ppa) ? NAND_MEDIA_SLC : NAND_MEDIA_TLC;
+}
+
+static struct line_mgmt *get_pool_lm(struct conv_ftl *conv_ftl, enum line_pool_id pool)
 {
 	if (pool == LINE_POOL_SLC)
 		return &conv_ftl->slc_rt.slc_lm;
@@ -372,50 +471,15 @@ static struct line_mgmt *get_pool_free_lm(struct conv_ftl *conv_ftl, enum line_p
 	return NULL;
 }
 
-static void dec_pool_free_line_cnt(struct conv_ftl *conv_ftl, struct line *line)
-{
-	struct line_mgmt *pool_lm = get_pool_free_lm(conv_ftl, line->pool);
-
-	NVMEV_ASSERT(pool_lm->free_line_cnt > 0);
-	pool_lm->free_line_cnt--;
-}
-
-static void inc_pool_free_line_cnt(struct conv_ftl *conv_ftl, struct line *line)
-{
-	struct line_mgmt *pool_lm = get_pool_free_lm(conv_ftl, line->pool);
-
-	pool_lm->free_line_cnt++;
-}
-
-static struct line *get_next_free_line(struct conv_ftl *conv_ftl)
-{
-	struct line_mgmt *lm = &conv_ftl->lm;
-	struct line *curline = list_first_entry_or_null(&lm->free_line_list, struct line, entry);
-
-	if (!curline) {
-		NVMEV_ERROR("No free line left in VIRT !!!!\n");
-		return NULL;
-	}
-
-	list_del_init(&curline->entry);
-	lm->free_line_cnt--;
-	dec_pool_free_line_cnt(conv_ftl, curline);
-	NVMEV_DEBUG("%s: free_line_cnt %d\n", __func__, lm->free_line_cnt);
-	return curline;
-}
-
 static struct line *get_next_free_line_by_pool(struct conv_ftl *conv_ftl, enum line_pool_id pool)
 {
-	struct line_mgmt *lm = &conv_ftl->lm;
+	struct line_mgmt *lm = get_pool_lm(conv_ftl, pool);
 	struct line *line = NULL;
 
 	list_for_each_entry(line, &lm->free_line_list, entry) {
-		if (line->pool != pool)
-			continue;
-
 		list_del_init(&line->entry);
+		NVMEV_ASSERT(lm->free_line_cnt > 0);
 		lm->free_line_cnt--;
-		dec_pool_free_line_cnt(conv_ftl, line);
 		return line;
 	}
 
@@ -446,7 +510,7 @@ static bool should_migrate_slc(struct conv_ftl *conv_ftl)
 static struct line *select_tlc_gc_victim_line(struct conv_ftl *conv_ftl, bool force)
 {
 	struct ssdparams *spp = &conv_ftl->ssd->sp;
-	struct line_mgmt *lm = &conv_ftl->lm;
+	struct line_mgmt *lm = &conv_ftl->slc_rt.tlc_lm;
 	struct line *victim_line = NULL;
 	pqueue_t *pq = lm->victim_line_pq;
 	size_t i;
@@ -460,12 +524,7 @@ static struct line *select_tlc_gc_victim_line(struct conv_ftl *conv_ftl, bool fo
 		unsigned int eligible = 0;
 		unsigned int pick;
 
-		for (i = 1; i < pq->size; i++) {
-			struct line *cand = pq->d[i];
-
-			if (cand->pool == LINE_POOL_TLC)
-				eligible++;
-		}
+		eligible = pq->size - 1;
 
 		if (eligible == 0)
 			return NULL;
@@ -474,8 +533,6 @@ static struct line *select_tlc_gc_victim_line(struct conv_ftl *conv_ftl, bool fo
 		for (i = 1; i < pq->size; i++) {
 			struct line *cand = pq->d[i];
 
-			if (cand->pool != LINE_POOL_TLC)
-				continue;
 			if (pick-- == 0) {
 				victim_line = cand;
 				break;
@@ -485,8 +542,6 @@ static struct line *select_tlc_gc_victim_line(struct conv_ftl *conv_ftl, bool fo
 		for (i = 1; i < pq->size; i++) {
 			struct line *cand = pq->d[i];
 
-			if (cand->pool != LINE_POOL_TLC)
-				continue;
 			if (!victim_line) {
 				victim_line = cand;
 				continue;
@@ -541,40 +596,32 @@ static bool slc_migration_candidate_is_better(struct line *candidate,
 
 static unsigned int count_slc_migration_candidates(struct conv_ftl *conv_ftl)
 {
-	struct line_mgmt *lm = &conv_ftl->lm;
+	struct line_mgmt *lm = &conv_ftl->slc_rt.slc_lm;
 	struct line *line;
 	pqueue_t *pq = lm->victim_line_pq;
 	unsigned int count = 0;
 	size_t i;
 
-	list_for_each_entry(line, &lm->full_line_list, entry) {
-		if (line->pool == LINE_POOL_SLC)
-			count++;
-	}
+	list_for_each_entry(line, &lm->full_line_list, entry)
+		count++;
 
 	if (!pq)
 		return count;
 
-	for (i = 1; i < pq->size; i++) {
-		struct line *cand = pq->d[i];
-
-		if (cand->pool == LINE_POOL_SLC)
-			count++;
-	}
+	for (i = 1; i < pq->size; i++)
+		count++;
 
 	return count;
 }
 
 static struct line *pick_nth_slc_migration_candidate(struct conv_ftl *conv_ftl, unsigned int pick)
 {
-	struct line_mgmt *lm = &conv_ftl->lm;
+	struct line_mgmt *lm = &conv_ftl->slc_rt.slc_lm;
 	struct line *line;
 	pqueue_t *pq = lm->victim_line_pq;
 	size_t i;
 
 	list_for_each_entry(line, &lm->full_line_list, entry) {
-		if (line->pool != LINE_POOL_SLC)
-			continue;
 		if (pick-- == 0)
 			return line;
 	}
@@ -585,8 +632,6 @@ static struct line *pick_nth_slc_migration_candidate(struct conv_ftl *conv_ftl, 
 	for (i = 1; i < pq->size; i++) {
 		struct line *cand = pq->d[i];
 
-		if (cand->pool != LINE_POOL_SLC)
-			continue;
 		if (pick-- == 0)
 			return cand;
 	}
@@ -596,7 +641,7 @@ static struct line *pick_nth_slc_migration_candidate(struct conv_ftl *conv_ftl, 
 
 static struct line *select_slc_migration_victim_line(struct conv_ftl *conv_ftl)
 {
-	struct line_mgmt *lm = &conv_ftl->lm;
+	struct line_mgmt *lm = &conv_ftl->slc_rt.slc_lm;
 	struct line *victim_line = NULL;
 	struct line *line = NULL;
 	pqueue_t *pq = lm->victim_line_pq;
@@ -612,8 +657,6 @@ static struct line *select_slc_migration_victim_line(struct conv_ftl *conv_ftl)
 	}
 
 	list_for_each_entry(line, &lm->full_line_list, entry) {
-		if (line->pool != LINE_POOL_SLC)
-			continue;
 		if (slc_migration_candidate_is_better(line, victim_line))
 			victim_line = line;
 	}
@@ -622,8 +665,6 @@ static struct line *select_slc_migration_victim_line(struct conv_ftl *conv_ftl)
 		for (i = 1; i < pq->size; i++) {
 			struct line *cand = pq->d[i];
 
-			if (cand->pool != LINE_POOL_SLC)
-				continue;
 			if (slc_migration_candidate_is_better(cand, victim_line))
 				victim_line = cand;
 		}
@@ -648,9 +689,11 @@ out:
 static struct write_pointer *__get_wp(struct conv_ftl *ftl, uint32_t io_type)
 {
 	if (io_type == USER_IO) {
-		return &ftl->wp;
+		if (ftl->slc_layout.slc_line_cnt > 0)
+			return &ftl->slc_rt.slc_wp;
+		return &ftl->slc_rt.tlc_wp;
 	} else if (io_type == GC_IO) {
-		return &ftl->gc_wp;
+		return &ftl->slc_rt.tlc_gc_wp;
 	}
 
 	NVMEV_ASSERT(0);
@@ -680,9 +723,10 @@ static void prepare_write_pointer(struct conv_ftl *conv_ftl, uint32_t io_type)
 static void advance_write_pointer(struct conv_ftl *conv_ftl, uint32_t io_type)
 {
 	struct ssdparams *spp = &conv_ftl->ssd->sp;
-	struct line_mgmt *lm = &conv_ftl->lm;
 	struct write_pointer *wpp = __get_wp(conv_ftl, io_type);
+	struct line_mgmt *lm = get_pool_lm(conv_ftl, wpp->curline->pool);
 	enum line_pool_id next_pool;
+	uint32_t oneshot_pgs = get_pool_pgs_per_oneshotpg(conv_ftl, wpp->curline->pool);
 
 	cb_clock++;
 
@@ -691,10 +735,10 @@ static void advance_write_pointer(struct conv_ftl *conv_ftl, uint32_t io_type)
 
 	check_addr(wpp->pg, spp->pgs_per_blk);
 	wpp->pg++;
-	if ((wpp->pg % spp->pgs_per_oneshotpg) != 0)
+	if ((wpp->pg % oneshot_pgs) != 0)
 		goto out;
 
-	wpp->pg -= spp->pgs_per_oneshotpg;
+	wpp->pg -= oneshot_pgs;
 	check_addr(wpp->ch, spp->nchs);
 	wpp->ch++;
 	if (wpp->ch != spp->nchs)
@@ -709,7 +753,7 @@ static void advance_write_pointer(struct conv_ftl *conv_ftl, uint32_t io_type)
 
 	wpp->lun = 0;
 	/* go to next wordline in the block */
-	wpp->pg += spp->pgs_per_oneshotpg;
+	wpp->pg += oneshot_pgs;
 	if (wpp->pg != spp->pgs_per_blk)
 		goto out;
 
@@ -956,18 +1000,18 @@ static inline bool mapped_ppa(struct ppa *ppa)
 
 static inline struct line *get_line(struct conv_ftl *conv_ftl, struct ppa *ppa)
 {
-	return &(conv_ftl->lm.lines[ppa->g.blk]);
+	return &(conv_ftl->lines[ppa->g.blk]);
 }
 
 /* update SSD status about one page from PG_VALID -> PG_VALID */
 static void mark_page_invalid(struct conv_ftl *conv_ftl, struct ppa *ppa)
 {
 	struct ssdparams *spp = &conv_ftl->ssd->sp;
-	struct line_mgmt *lm = &conv_ftl->lm;
 	struct nand_block *blk = NULL;
 	struct nand_page *pg = NULL;
 	bool was_full_line = false;
 	struct line *line;
+	struct line_mgmt *lm;
 
 	/* update corresponding page status */
 	pg = get_pg(conv_ftl->ssd, ppa);
@@ -983,6 +1027,7 @@ static void mark_page_invalid(struct conv_ftl *conv_ftl, struct ppa *ppa)
 
 	/* update corresponding line status */
 	line = get_line(conv_ftl, ppa);
+	lm = get_pool_lm(conv_ftl, line->pool);
 	NVMEV_ASSERT(line->ipc >= 0 && line->ipc < spp->pgs_per_line);
 	if (line->vpc == spp->pgs_per_line) {
 		NVMEV_ASSERT(line->ipc == 0);
@@ -1060,11 +1105,15 @@ static void gc_read_page(struct conv_ftl *conv_ftl, struct ppa *ppa)
 {
 	struct ssdparams *spp = &conv_ftl->ssd->sp;
 	struct convparams *cpp = &conv_ftl->cp;
+	int media = get_ppa_nand_media(conv_ftl, ppa);
+
+	count_media_reads(GC_IO, media, 1);
 	/* advance conv_ftl status, we don't care about how long it takes */
 	if (cpp->enable_gc_delay) {
 		struct nand_cmd gcr = {
 			.type = GC_IO,
 			.cmd = NAND_READ,
+			.media = media,
 			.stime = 0,
 			.xfer_size = spp->pgsz,
 			.interleave_pci_dma = false,
@@ -1090,6 +1139,7 @@ static uint64_t gc_write_page(struct conv_ftl *conv_ftl, struct ppa *old_ppa)
 	set_rmap_ent(conv_ftl, lpn, &new_ppa);
 
 	mark_page_valid(conv_ftl, &new_ppa);
+	count_media_writes(GC_IO, get_ppa_nand_media(conv_ftl, &new_ppa), 1);
 
 	/* need to advance the write pointer here */
 	advance_write_pointer(conv_ftl, GC_IO);
@@ -1098,13 +1148,14 @@ static uint64_t gc_write_page(struct conv_ftl *conv_ftl, struct ppa *old_ppa)
 		struct nand_cmd gcw = {
 			.type = GC_IO,
 			.cmd = NAND_NOP,
+			.media = NAND_MEDIA_TLC,
 			.stime = 0,
 			.interleave_pci_dma = false,
 			.ppa = &new_ppa,
 		};
 		if (last_pg_in_wordline(conv_ftl, &new_ppa)) {
 			gcw.cmd = NAND_WRITE;
-			gcw.xfer_size = spp->pgsz * spp->pgs_per_oneshotpg;
+			gcw.xfer_size = spp->pgsz * get_ppa_pgs_per_oneshotpg(conv_ftl, &new_ppa);
 		}
 
 		ssd_advance_nand(conv_ftl->ssd, &gcw);
@@ -1171,10 +1222,13 @@ static void clean_one_flashpg(struct conv_ftl *conv_ftl, struct ppa *ppa)
 	if (cnt <= 0)
 		return;
 
+	count_media_reads(GC_IO, get_ppa_nand_media(conv_ftl, &ppa_copy), cnt);
+
 	if (cpp->enable_gc_delay) {
 		struct nand_cmd gcr = {
 			.type = GC_IO,
 			.cmd = NAND_READ,
+			.media = get_ppa_nand_media(conv_ftl, &ppa_copy),
 			.stime = 0,
 			.xfer_size = spp->pgsz * cnt,
 			.interleave_pci_dma = false,
@@ -1198,20 +1252,20 @@ static void clean_one_flashpg(struct conv_ftl *conv_ftl, struct ppa *ppa)
 
 static void mark_line_free(struct conv_ftl *conv_ftl, struct ppa *ppa)
 {
-	struct line_mgmt *lm = &conv_ftl->lm;
 	struct line *line = get_line(conv_ftl, ppa);
+	struct line_mgmt *lm = get_pool_lm(conv_ftl, line->pool);
 	line->ipc = 0;
 	line->vpc = 0;
 	/* move this line to free line list */
 	list_add_tail(&line->entry, &lm->free_line_list);
 	lm->free_line_cnt++;
-	inc_pool_free_line_cnt(conv_ftl, line);
 }
 
 static int reclaim_one_line(struct conv_ftl *conv_ftl, struct line *victim_line,
 			    enum reclaim_reason reason, bool refill_credit)
 {
 	struct ssdparams *spp = &conv_ftl->ssd->sp;
+	struct line_mgmt *lm;
 	struct ppa ppa;
 	int flashpg;
 
@@ -1220,9 +1274,10 @@ static int reclaim_one_line(struct conv_ftl *conv_ftl, struct line *victim_line,
 	}
 
 	ppa.g.blk = victim_line->id;
+	lm = get_pool_lm(conv_ftl, victim_line->pool);
 	NVMEV_DEBUG_VERBOSE("GC-ing line:%d,ipc=%d(%d),victim=%d,full=%d,free=%d\n", ppa.g.blk,
-		    victim_line->ipc, victim_line->vpc, conv_ftl->lm.victim_line_cnt,
-		    conv_ftl->lm.full_line_cnt, conv_ftl->lm.free_line_cnt);
+		    victim_line->ipc, victim_line->vpc, lm->victim_line_cnt,
+		    lm->full_line_cnt, get_total_free_line_cnt(conv_ftl));
 
 	if (reason == RECLAIM_REASON_TLC_GC) {
 		tlc_gc_cnt++;
@@ -1263,6 +1318,7 @@ static int reclaim_one_line(struct conv_ftl *conv_ftl, struct line *victim_line,
 						struct nand_cmd gce = {
 							.type = GC_IO,
 							.cmd = NAND_ERASE,
+							.media = get_ppa_nand_media(conv_ftl, &ppa),
 							.stime = 0,
 							.interleave_pci_dma = false,
 							.ppa = &ppa,
@@ -1348,6 +1404,7 @@ static bool conv_read(struct nvmev_ns *ns, struct nvmev_request *req, struct nvm
 	struct nand_cmd srd = {
 		.type = USER_IO,
 		.cmd = NAND_READ,
+		.media = NAND_MEDIA_TLC,
 		.stime = nsecs_start,
 		.interleave_pci_dma = true,
 	};
@@ -1394,8 +1451,11 @@ static bool conv_read(struct nvmev_ns *ns, struct nvmev_request *req, struct nvm
 			}
 
 			if (xfer_size > 0) {
+				count_media_reads(USER_IO, get_ppa_nand_media(conv_ftl, &prev_ppa),
+						 xfer_size / spp->pgsz);
 				srd.xfer_size = xfer_size;
 				srd.ppa = &prev_ppa;
+				srd.media = get_ppa_nand_media(conv_ftl, &prev_ppa);
 				nsecs_completed = ssd_advance_nand(conv_ftl->ssd, &srd);
 				nsecs_latest = max(nsecs_completed, nsecs_latest);
 			}
@@ -1406,8 +1466,11 @@ static bool conv_read(struct nvmev_ns *ns, struct nvmev_request *req, struct nvm
 
 		// issue remaining io
 		if (xfer_size > 0) {
+			count_media_reads(USER_IO, get_ppa_nand_media(conv_ftl, &prev_ppa),
+					 xfer_size / spp->pgsz);
 			srd.xfer_size = xfer_size;
 			srd.ppa = &prev_ppa;
+			srd.media = get_ppa_nand_media(conv_ftl, &prev_ppa);
 			nsecs_completed = ssd_advance_nand(conv_ftl->ssd, &srd);
 			nsecs_latest = max(nsecs_completed, nsecs_latest);
 		}
@@ -1443,8 +1506,9 @@ static bool conv_write(struct nvmev_ns *ns, struct nvmev_request *req, struct nv
 	struct nand_cmd swr = {
 		.type = USER_IO,
 		.cmd = NAND_WRITE,
+		.media = NAND_MEDIA_SLC,
 		.interleave_pci_dma = false,
-		.xfer_size = spp->pgsz * spp->pgs_per_oneshotpg,
+		.xfer_size = 0,
 	};
 
 	NVMEV_DEBUG_VERBOSE("%s: start_lpn=%lld, len=%lld, end_lpn=%lld", __func__, start_lpn, nr_lba, end_lpn);
@@ -1495,13 +1559,17 @@ static bool conv_write(struct nvmev_ns *ns, struct nvmev_request *req, struct nv
 
 		/* Aggregate write io in flash page */
 		if (last_pg_in_wordline(conv_ftl, &ppa)) {
+			uint64_t write_pages = get_ppa_pgs_per_oneshotpg(conv_ftl, &ppa);
 			swr.ppa = &ppa;
+			swr.media = get_ppa_nand_media(conv_ftl, &ppa);
+			swr.xfer_size = spp->pgsz * write_pages;
+			count_media_writes(USER_IO, swr.media, write_pages);
 
 			nsecs_completed = ssd_advance_nand(conv_ftl->ssd, &swr);
 			nsecs_latest = max(nsecs_completed, nsecs_latest);
 
 			schedule_internal_operation(req->sq_id, nsecs_completed, wbuf,
-						    spp->pgs_per_oneshotpg * spp->pgsz);
+						    swr.xfer_size);
 		}
 
 		if (!ppa_is_slc(conv_ftl, &ppa)) {

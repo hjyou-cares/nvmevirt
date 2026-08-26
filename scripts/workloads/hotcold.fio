@@ -65,7 +65,6 @@ rw=randwrite
 size=${COLD_TOUCH_SIZE}
 time_based=1
 runtime=${HOTCOLD_RUNTIME}
-stonewall
 
 [hot_churn]
 filename=hotfile

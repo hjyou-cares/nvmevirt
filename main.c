@@ -410,6 +410,14 @@ static int __proc_file_read(struct seq_file *m, void *data)
 		seq_printf(m, "SLC_MIGRATION_CNT %llu\n", slc_migration_cnt);
 		seq_printf(m, "SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT %llu\n",
 			   slc_migration_valid_page_migrate_cnt);
+		seq_printf(m, "USER_READ_SLC_PAGES %llu\n", user_read_slc_pages);
+		seq_printf(m, "USER_READ_TLC_PAGES %llu\n", user_read_tlc_pages);
+		seq_printf(m, "USER_WRITE_SLC_PAGES %llu\n", user_write_slc_pages);
+		seq_printf(m, "USER_WRITE_TLC_PAGES %llu\n", user_write_tlc_pages);
+		seq_printf(m, "INTERNAL_READ_SLC_PAGES %llu\n", internal_read_slc_pages);
+		seq_printf(m, "INTERNAL_READ_TLC_PAGES %llu\n", internal_read_tlc_pages);
+		seq_printf(m, "INTERNAL_WRITE_SLC_PAGES %llu\n", internal_write_slc_pages);
+		seq_printf(m, "INTERNAL_WRITE_TLC_PAGES %llu\n", internal_write_tlc_pages);
 		seq_printf(m, "DIAG_TOTAL_GC %llu\n", diag_total_gc);
 		seq_printf(m, "DIAG_IDENTITY_DIVERGE %llu\n", diag_identity_diverge);
 		seq_printf(m, "DIAG_SUM_GREEDY_VPC %llu\n", diag_sum_greedy_vpc);
@@ -473,6 +481,14 @@ static ssize_t __proc_file_write(struct file *file, const char __user *buf, size
 			tlc_gc_valid_page_migrate_cnt = 0;
 			slc_migration_cnt = 0;
 			slc_migration_valid_page_migrate_cnt = 0;
+			user_read_slc_pages = 0;
+			user_read_tlc_pages = 0;
+			user_write_slc_pages = 0;
+			user_write_tlc_pages = 0;
+			internal_read_slc_pages = 0;
+			internal_read_tlc_pages = 0;
+			internal_write_slc_pages = 0;
+			internal_write_tlc_pages = 0;
 			diag_total_gc = 0;
 			diag_identity_diverge = 0;
 			diag_sum_greedy_vpc = 0;

@@ -33,6 +33,12 @@ enum {
 };
 
 enum {
+	NAND_MEDIA_DEFAULT = 0,
+	NAND_MEDIA_SLC = 1,
+	NAND_MEDIA_TLC = 2,
+};
+
+enum {
 	USER_IO = 0,
 	GC_IO = 1,
 };
@@ -125,6 +131,7 @@ struct ssd_pcie {
 struct nand_cmd {
 	int type;
 	int cmd;
+	int media;
 	uint64_t xfer_size; // byte
 	uint64_t stime; /* Coperd: request arrival time */
 	bool interleave_pci_dma;
@@ -152,6 +159,7 @@ struct ssdparams {
 	int pgs_per_flashpg; /* # of pgs per flash page */
 	int flashpgs_per_blk; /* # of flash pages per block */
 	int pgs_per_oneshotpg; /* # of pgs per oneshot page */
+	int slc_pgs_per_oneshotpg; /* # of pgs per SLC oneshot page */
 	int oneshotpgs_per_blk; /* # of oneshot pages per block */
 	int pgs_per_blk; /* # of pages per block */
 	int blks_per_pl; /* # of blocks per plane */
@@ -169,6 +177,9 @@ struct ssdparams {
 		[MAX_CELL_TYPES]; /* NAND page 4KB read latency in nanoseconds. sensing time (half tR) */
 	int pg_rd_lat[MAX_CELL_TYPES]; /* NAND page read latency in nanoseconds. sensing time (tR) */
 	int pg_wr_lat; /* NAND page program latency in nanoseconds. pgm time (tPROG)*/
+	int slc_pg_4kb_rd_lat; /* SLC 4KB read latency in nanoseconds */
+	int slc_pg_rd_lat; /* SLC page read latency in nanoseconds */
+	int slc_pg_wr_lat; /* SLC page program latency in nanoseconds */
 	int blk_er_lat; /* NAND block erase latency in nanoseconds. erase time (tERASE) */
 	int max_ch_xfer_size;
 

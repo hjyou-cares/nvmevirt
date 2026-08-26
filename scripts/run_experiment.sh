@@ -14,6 +14,7 @@
 #   MOUNT_DIR     기본값 $HOME/nvme_mount
 #   TLC_GC_POLICY 기본값 0. 실습2에서는 TLC GC와 SLC migration 의미가 분리됐으므로
 #                 이 스크립트는 TLC GC를 고정하고 slc_migration_policy만 비교한다.
+#   SLC_CACHE_RATIO_PERCENT 기본값 10. 0이면 TLC-only baseline, 10이면 현재 기본 SLC cache.
 #
 # 예) 서버에서: NVME_DEV=/dev/nvme1n1 MEMMAP_START=16G MEMMAP_SIZE=48G NVME_CPUS=7,8 \
 #              ./scripts/run_experiment.sh 3 randwrite6g uniform
@@ -36,6 +37,7 @@ MEMMAP_SIZE="${MEMMAP_SIZE:-1G}"
 NVME_CPUS="${NVME_CPUS:-2,3}"
 MOUNT_DIR="${MOUNT_DIR:-$HOME/nvme_mount}"
 TLC_GC_POLICY="${TLC_GC_POLICY:-0}"
+SLC_CACHE_RATIO_PERCENT="${SLC_CACHE_RATIO_PERCENT:-10}"
 # hotcold 워크로드 전용 (v7, 2026-07-30): 콜드/핫을 물리적으로 분리된 line에
 # 쓰기 위해 cold_fill 이후 cold_touch/hot_churn을 병렬 실행함 (자세한 이유는
 # scripts/workloads/hotcold.fio 상단 주석 참고). v6(size 기반, COLD_TOUCH_SIZE=15G)는
@@ -109,7 +111,8 @@ mkdir -p "$MOUNT_DIR"
 sudo umount "$MOUNT_DIR" 2>/dev/null || true
 sudo rmmod nvmev 2>/dev/null || true
 sudo insmod "$REPO_ROOT/nvmev.ko" memmap_start="$MEMMAP_START" memmap_size="$MEMMAP_SIZE" \
-    cpus="$NVME_CPUS" gc_policy="$TLC_GC_POLICY" slc_migration_policy="$POLICY"
+    cpus="$NVME_CPUS" gc_policy="$TLC_GC_POLICY" slc_migration_policy="$POLICY" \
+    slc_cache_ratio_percent="$SLC_CACHE_RATIO_PERCENT"
 
 if command -v udevadm >/dev/null 2>&1; then
   sudo udevadm settle
@@ -208,6 +211,7 @@ awk '
   echo "cpus=$NVME_CPUS"
   echo "tlc_gc_policy=$TLC_GC_POLICY"
   echo "slc_migration_policy=$POLICY"
+  echo "slc_cache_ratio_percent=$SLC_CACHE_RATIO_PERCENT"
   echo "fio_cmd=$FIO_CMD"
 } > "$OUTDIR/meta.txt"
 

@@ -61,7 +61,7 @@ get_fio_value() {
   jq -r "$expr // \"\"" "$file"
 }
 
-echo "timestamp,policy,policy_name,policy_target,label,workload,slc_migration_policy,tlc_gc_policy,random_dist,norandommap,uniform_size,uniform_loops,cold_size,cold_touch_size,hot_size,hotcold_runtime,memmap_size,nonzero_blocks,erase_sum,erase_max,slc_migration_cnt,slc_migrate_pages,tlc_gc_cnt,tlc_gc_migrate_pages,legacy_gc_migrate_pages,erase_cv,erase_cv_all,lat_avg_ns,lat_p99_ns"
+echo "timestamp,policy,policy_name,policy_target,label,workload,slc_migration_policy,tlc_gc_policy,slc_cache_ratio_percent,random_dist,norandommap,uniform_size,uniform_loops,cold_size,cold_touch_size,hot_size,hotcold_runtime,memmap_size,nonzero_blocks,erase_sum,erase_max,slc_migration_cnt,slc_migrate_pages,tlc_gc_cnt,tlc_gc_migrate_pages,legacy_gc_migrate_pages,erase_cv,erase_cv_all,write_bw_kib,write_iops,write_lat_avg_ns,write_lat_p99_ns,read_bw_kib,read_iops,read_lat_avg_ns,read_lat_p99_ns"
 
 for dir in "$REPO_ROOT"/results/*/; do
   meta_file="$dir/meta.txt"
@@ -85,6 +85,7 @@ for dir in "$REPO_ROOT"/results/*/; do
   workload=$(get_meta_value "$meta_file" "workload")
   slc_migration_policy=$(get_first_meta_value "$meta_file" "slc_migration_policy" "policy")
   tlc_gc_policy=$(get_first_meta_value "$meta_file" "tlc_gc_policy" "gc_policy")
+  slc_cache_ratio_percent=$(get_meta_value "$meta_file" "slc_cache_ratio_percent")
   random_dist=$(get_meta_value "$meta_file" "random_dist")
   norandommap=$(get_meta_value "$meta_file" "norandommap")
   uniform_size=$(get_meta_value "$meta_file" "uniform_size")
@@ -118,8 +119,14 @@ for dir in "$REPO_ROOT"/results/*/; do
   # jobs[0]은 콜드파일 순차쓰기 구간이 되어버림 -- GC 부하가 실제로 걸리는
   # 마지막 job(그룹)을 봐야 함 (2026-07-30 발견). uniform은 job이 하나뿐이라
   # jobs[-1]이 jobs[0]과 동일해서 영향 없음.
-  lat_avg_ns=$(get_fio_value "$fio_file" '.jobs[-1].write.lat_ns.mean')
-  lat_p99_ns=$(get_fio_value "$fio_file" '.jobs[-1].write.clat_ns.percentile["99.000000"]')
+  write_bw_kib=$(get_fio_value "$fio_file" '.jobs[-1].write.bw')
+  write_iops=$(get_fio_value "$fio_file" '.jobs[-1].write.iops')
+  write_lat_avg_ns=$(get_fio_value "$fio_file" '.jobs[-1].write.lat_ns.mean')
+  write_lat_p99_ns=$(get_fio_value "$fio_file" '.jobs[-1].write.clat_ns.percentile["99.000000"]')
+  read_bw_kib=$(get_fio_value "$fio_file" '.jobs[-1].read.bw')
+  read_iops=$(get_fio_value "$fio_file" '.jobs[-1].read.iops')
+  read_lat_avg_ns=$(get_fio_value "$fio_file" '.jobs[-1].read.lat_ns.mean')
+  read_lat_p99_ns=$(get_fio_value "$fio_file" '.jobs[-1].read.clat_ns.percentile["99.000000"]')
 
-  echo "$timestamp,$policy,$policy_name,$policy_target,$label,$workload,$slc_migration_policy,$tlc_gc_policy,$random_dist,$norandommap,$uniform_size,$uniform_loops,$cold_size,$cold_touch_size,$hot_size,$hotcold_runtime,$memmap_size,$nonzero_blocks,$erase_sum,$erase_max,$slc_migration_cnt,$slc_migrate_pages,$tlc_gc_cnt,$tlc_gc_migrate_pages,$legacy_gc_migrate_pages,$erase_cv,$erase_cv_all,$lat_avg_ns,$lat_p99_ns"
+  echo "$timestamp,$policy,$policy_name,$policy_target,$label,$workload,$slc_migration_policy,$tlc_gc_policy,$slc_cache_ratio_percent,$random_dist,$norandommap,$uniform_size,$uniform_loops,$cold_size,$cold_touch_size,$hot_size,$hotcold_runtime,$memmap_size,$nonzero_blocks,$erase_sum,$erase_max,$slc_migration_cnt,$slc_migrate_pages,$tlc_gc_cnt,$tlc_gc_migrate_pages,$legacy_gc_migrate_pages,$erase_cv,$erase_cv_all,$write_bw_kib,$write_iops,$write_lat_avg_ns,$write_lat_p99_ns,$read_bw_kib,$read_iops,$read_lat_avg_ns,$read_lat_p99_ns"
 done

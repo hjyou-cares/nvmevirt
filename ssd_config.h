@@ -101,6 +101,21 @@ static_assert((ONESHOT_PAGE_SIZE % FLASH_PAGE_SIZE) == 0);
 #define NAND_PROG_LATENCY (185000)
 #define NAND_ERASE_LATENCY (0)
 
+/*
+ * Practice 2 keeps the legacy Samsung geometry as the TLC baseline and adds a
+ * lighter SLC programming unit/timing model on top of it.
+ * - TLC stays on the historical ONESHOT_PAGE_SIZE and NAND_* latencies.
+ * - SLC uses a smaller program unit and faster LSB-like timings.
+ */
+#define TLC_ONESHOT_PAGE_SIZE (ONESHOT_PAGE_SIZE)
+#define SLC_ONESHOT_PAGE_SIZE KB(16)
+static_assert((TLC_ONESHOT_PAGE_SIZE % FLASH_PAGE_SIZE) == 0);
+static_assert((SLC_ONESHOT_PAGE_SIZE % KB(4)) == 0);
+
+#define SLC_NAND_4KB_READ_LATENCY (NAND_4KB_READ_LATENCY_LSB)
+#define SLC_NAND_READ_LATENCY (NAND_READ_LATENCY_LSB)
+#define SLC_NAND_PROG_LATENCY (NAND_PROG_LATENCY / 3)
+
 #define FW_4KB_READ_LATENCY (21500)
 #define FW_READ_LATENCY (30490)
 #define FW_WBUF_LATENCY0 (4000)
