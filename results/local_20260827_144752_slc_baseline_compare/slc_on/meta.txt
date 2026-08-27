@@ -1,0 +1,12 @@
+mode=baseline
+variant=slc_on
+policy=0
+slc_cache_ratio_percent=10
+baseline_size=6G
+baseline_loops=2
+baseline_rw=randwrite
+nvme_dev=/dev/nvme1n1
+memmap_start=16G
+memmap_size=48G
+cpus=7,8
+tlc_gc_policy=0

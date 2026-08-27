@@ -36,6 +36,8 @@ static inline unsigned long long __get_wallclock(void)
 	return cpu_clock(nvmev_vdev->config.cpu_nr_dispatcher);
 }
 
+static void __reclaim_completed_reqs(void);
+
 static inline size_t __cmd_io_offset(struct nvme_rw_command *cmd)
 {
 	return (cmd->slba) << LBA_BITS;
@@ -293,14 +295,29 @@ static void __insert_req_sorted(unsigned int entry, struct nvmev_io_worker *work
 
 static struct nvmev_io_worker *__allocate_work_queue_entry(int sqid, unsigned int *entry)
 {
-	unsigned int io_worker_turn = __get_io_worker(sqid);
-	struct nvmev_io_worker *worker = &nvmev_vdev->io_workers[io_worker_turn];
-	unsigned int e = worker->free_seq;
-	struct nvmev_io_work *w = worker->work_queue + e;
+	unsigned int io_worker_turn;
+	struct nvmev_io_worker *worker;
+	unsigned int e;
+	struct nvmev_io_work *w;
+	unsigned int retry = 0;
 
-	if (w->next >= NR_MAX_PARALLEL_IO) {
-		WARN_ON_ONCE("IO queue is almost full");
-		return NULL;
+	for (;;) {
+		io_worker_turn = __get_io_worker(sqid);
+		worker = &nvmev_vdev->io_workers[io_worker_turn];
+		e = worker->free_seq;
+		w = worker->work_queue + e;
+
+		if (w->next < NR_MAX_PARALLEL_IO)
+			break;
+
+		if ((retry % 1024) == 0) {
+			NVMEV_ERROR("IO worker queue saturated for sqid=%d worker=%u, waiting for reclaim\n",
+				    sqid, io_worker_turn);
+		}
+
+		__reclaim_completed_reqs();
+		cond_resched();
+		retry++;
 	}
 
 	if (++io_worker_turn == nvmev_vdev->config.nr_io_workers)

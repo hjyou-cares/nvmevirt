@@ -1,0 +1,23 @@
+timestamp=20260827_191111
+policy=1
+policy_name=random
+policy_target=slc_migration
+label=hotcold_server_random_mid_guarded
+workload=hotcold
+uniform_size=600M
+uniform_loops=250
+random_dist=uniform
+norandommap=0
+cold_size=8G
+cold_touch_size=4G
+hot_size=512M
+hotcold_runtime=45
+disk_condition=fresh_module_reload_and_mkfs
+nvme_dev=/dev/nvme1n1
+memmap_start=16G
+memmap_size=48G
+cpus=7,8
+tlc_gc_policy=0
+slc_migration_policy=1
+slc_cache_ratio_percent=10
+fio_cmd=COLD_SIZE=8G COLD_TOUCH_SIZE=4G HOT_SIZE=512M HOTCOLD_RUNTIME=45 fio /home/hjyoo/nvmevirt2/scripts/workloads/hotcold.fio --directory=$MOUNT_DIR

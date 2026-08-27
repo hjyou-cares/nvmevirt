@@ -1,0 +1,10 @@
+mode=slc_only
+policy=0
+slc_cache_ratio_percent=10
+file_size=64M
+read_bs=4k
+nvme_dev=/dev/nvme1n1
+memmap_start=16G
+memmap_size=48G
+cpus=7,8
+tlc_gc_policy=0

@@ -2,7 +2,7 @@
 
 ## 현재 흐름
 
-- 실습2 WIP는 commit `8aa39ca`로 로컬/원격에 반영됐다.
+- 실습2 WIP HEAD는 commit `09f41ac`로 로컬/원격(`origin/practice2-slc-cache`)에 반영됐다.
 - 핵심 변경 파일은 `conv_ftl.c`, `conv_ftl.h`, `ssd.c`, `ssd.h`, `ssd_config.h`, `main.c`다.
 - 현재 코드는 SLC/TLC pool metadata, pool-aware write path, SLC migration 4정책, migration/TLC GC counter 분리, SLC/TLC oneshot/timing 분기, `slc_wp/tlc_wp/tlc_gc_wp` direct path, `slc_lm/tlc_lm` direct manager path까지 들어간 상태다.
 - 현재 worktree 기준 `SLC_CACHE_RATIO_PERCENT`는 `10`이라 SLC path가 컴파일 시 기본 활성이다.
@@ -11,22 +11,29 @@
 - `scripts/collect_summary.sh`는 이제 `slc_cache_ratio_percent`, `write_bw_kib`, `write_iops`, `read_bw_kib`, `read_iops`, read/write latency를 함께 CSV로 모은다.
 - 새 로컬 검증 스크립트 `scripts/run_local_slc_validation.sh`가 추가됐다. `baseline`, `slc_only`, `overflow`, `all` 모드로 1번 결과물용 실험을 바로 돌리도록 만든 상태다.
 - 로컬 VM 기준 `make`, smoke, CRC verify, `zipf_nrm`, `hotcold_v7_local_fix2`까지 사용자 확인으로 정상 수행됐다.
-- 서버 저장소 `~/nvmevirt`도 `practice2-slc-cache` 브랜치의 `8aa39ca`까지 동기화돼 있지만, 현재는 서버 이슈 때문에 로컬 우선으로 진행한다.
+- 서버 형제 저장소 `~/nvmevirt`에는 `9eb9f0b` 시점의 `nvmev.ko`만 확인됐고, 현재 HEAD `09f41ac`와는 커널 코드 차이가 있어 재빌드 없이 재사용하면 안 된다.
 - 최종 보고서용 실측값은 서버에서 다시 수집해야 한다. 로컬 VM 결과는 스크립트/계측 검증과 방향 확인용으로만 취급한다.
-- 2026-08-26 현재는 서버 접속/실행이 불안정해서, 오늘은 로컬 검증까지만 진행하고 서버 실측 재수집은 2026-08-27에 다시 시도하는 전제로 움직인다.
+- 2026-08-27 현재 Codex 서버 세션에서는 `sudo`, `lsblk`, `/proc`, `/sys` 접근이 막혀 있어서, 여기서 직접 `insmod -> mkfs -> mount -> fio` 흐름을 실행할 수는 없다.
+- 2026-08-27 현재 이 세션 PATH 기준으로 `make`, `gcc`, `clang`, `fio`, `tmux`는 보이지 않고 `jq`만 확인된다. 따라서 실제 빌드/실험은 일반 로그인 shell에서 다시 확인해야 한다.
+- 2026-08-27 현재 worktree WIP에는 `conv_ftl.c`, `conv_ftl.h` 기준으로 reclaim 시작 전 TLC capacity precheck, TLC GC 성공 시에만 write credit refill, host write path의 hidden reclaim 제거가 추가됐다.
+- 같은 날 추가 WIP로 SLC migration은 reclaim 후에도 TLC GC 1 line capacity를 남기는 후보만 선택하도록 reserve-style admission control을 넣었다.
+- 이 guarded WIP는 2026-08-27 서버 일반 shell에서 실제로 build/실행 검증됐다.
+- 검증 완료 범위: `overflow` 재검증 성공, `random/greedy/fifo/cost-benefit hotcold full guarded` 성공, `CRC verify policy1` 성공.
 
 ## 다음에 바로 할 일
 
-1. 오늘(2026-08-26)은 로컬 검증 스크립트와 집계 스크립트가 정상 동작하는지만 확인한다.
-2. 내일(2026-08-27) 서버에서 새 코드로 `make` 후 baseline(`slc_cache_ratio_percent=0`)과 SLC-on(`10`) 실험을 다시 돌려 1번 결과물용 실측값을 확보한다.
-3. 내일(2026-08-27) 서버에서 `SLC-only` / `overflow` 검증을 돌려 `USER_*_PAGES`, `INTERNAL_*_PAGES` 기준 정상동작 증거를 확보한다.
-4. 서버에서 정책 비교 workload도 다시 돌린 뒤 `./scripts/collect_summary.sh > /tmp/nvmevirt_summary.csv`로 throughput/iops 포함 CSV를 모은다.
-5. 그 다음 서버 실측값 기준으로 표와 본문을 정리한다.
+1. `./scripts/collect_summary.sh > /tmp/nvmevirt_summary.csv`로 오늘까지의 결과를 CSV로 모은다.
+2. baseline(`slc_cache_ratio_percent=0`) vs SLC-on(`10`) 결과를 최종 표용으로 정리한다.
+3. 서버 `zipf_nrm` 4정책과 `hotcold full guarded` 4정책을 같은 형식으로 정리한다.
+4. `slc_migrate_pages`, `tlc_gc_cnt`, `erase sum`, `erase max`, `erase_cv_all` 중심으로 비교표를 만든다.
+5. 그 기준으로 보고서 본문을 작성한다.
 
 ## 미구현 핵심 항목
 
 - 서버 baseline(`slc_cache_ratio_percent=0`) vs SLC-on 실측 run
-- 서버 `SLC-only` / `overflow` 검증 실측 run
+- 결과 표/본문 정리
+- `collect_summary.sh` 기반 최종 CSV 정리
+- 실패 흔적 run 제외 기준 정리
 - 결과 표/본문 정리
 - 필요 시 `TLC_GC_CNT > 0` workload 추가
 - 필요 시 line metadata 저장소 분리
@@ -34,11 +41,12 @@
 ## 주의할 점
 
 - 현재 기본 `SLC_CACHE_RATIO_PERCENT`는 `10`이다.
-- 현재 내 shell에서는 `make`가 안 잡혀서 새 코드를 직접 빌드/실행하지는 못했다. 다음 실행 전에는 빌드 가능한 환경인지 먼저 확인해야 한다.
+- 2026-08-27 현재 Codex 서버 세션에서는 `make`가 안 잡히고 `sudo`, `lsblk`, `/proc`, `/sys` 접근도 막혀 있어 새 코드를 직접 빌드/실행하지는 못했다. 다음 실행은 일반 로그인 shell에서 해야 한다.
 - `echo reset > /proc/nvmev/debug`는 counter만 초기화하고 FTL state는 초기화하지 않는다.
 - 정책 비교는 반드시 `umount -> rmmod -> insmod -> mkfs -> mount`의 fresh reload 조건으로 수행한다.
 - 로컬 VM은 용량이 작아 `No space left on device` 같은 파일시스템 노이즈가 섞이기 쉽다. 최종 실측과 결과 표는 서버 결과만 기준으로 쓴다.
 - `scripts/run_local_slc_validation.sh`는 `SLC_RATIO_OFF=0`, `SLC_RATIO_ON=10`을 기본으로 baseline/validation을 구성한다. `OVERFLOW_SIZE`가 너무 작아 migration이 안 보이면 더 키워야 한다.
+- `results/20260827_191221_slcpolicy1_random_hotcold_server_random_full_guarded/`와 `results/20260827_192227_slcpolicy1_random_hotcold_server_random_full_guarded/`는 실패 흔적이라 최종 집계에서 제외한다.
 - 로컬 `zipf_nrm` 재실행은 `RANDOM_DIST=zipf:1.2 NORANDOMMAP=1 UNIFORM_SIZE=600M UNIFORM_LOOPS=10 TLC_GC_POLICY=0`를 반드시 명시한다. 빠뜨리면 기본 `uniform 600M x 250`가 돌아간다.
 - 로컬에서 정책별 `for` 루프를 돌릴 때 VS Code Remote가 끊기면 대개 `umount/rmmod/insmod/mkfs/mount` 재초기화 경계 문제라서 `tmux` 안에서 실행하는 편이 안전하다.
 - active I/O path는 `slc_wp/tlc_wp/tlc_gc_wp`와 `slc_lm/tlc_lm` 기준으로 나뉘었지만, line metadata 저장소는 아직 `conv_ftl->lines` 하나를 공유한다.
@@ -49,6 +57,17 @@
 ## 최신 검증 요약
 
 - 로컬 VM에서 `make` 정상 동작 확인.
+- 2026-08-27 서버 일반 shell에서 guarded/reserve WIP 기준 `hotcold full guarded` 4정책이 모두 성공했다.
+  - Greedy(`0`) `results/20260827_193453_slcpolicy0_greedy_hotcold_server_greedy_full_guarded/`: `sum=361104`, `max=41`, `slc_migrate_pages=18352180`, `tlc_gc_cnt=18828`
+  - Random(`1`) `results/20260827_192853_slcpolicy1_random_hotcold_server_random_full_guarded/`: `sum=375216`, `max=42`, `slc_migrate_pages=18794946`, `tlc_gc_cnt=19670`
+  - FIFO(`2`) `results/20260827_193630_slcpolicy2_fifo_hotcold_server_fifo_full_guarded/`: `sum=361344`, `max=25`, `slc_migrate_pages=15852568`, `tlc_gc_cnt=11922`
+  - Cost-Benefit(`3`) `results/20260827_193804_slcpolicy3_costbenefit_hotcold_server_cb_full_guarded/`: `sum=363748`, `max=31`, `slc_migrate_pages=17472902`, `tlc_gc_cnt=16177`
+  - `slc_migrate_pages` 순위는 `FIFO < Cost-Benefit < Greedy < Random`
+  - `max`는 FIFO(`2`)가 최소
+- 2026-08-27 서버 일반 shell에서 `overflow` 재검증도 성공했다.
+  - `results/local_20260827_193407_slc_overflow_validation/`: `SLC_MIGRATION_CNT=1476`, `USER_READ_TLC_PAGES=476118`, `INTERNAL_WRITE_TLC_PAGES=566781`
+- 2026-08-27 서버 일반 shell에서 `CRC verify policy1`도 성공했다.
+  - `results/local_20260827_194155_slc_verify_policy1/`: `fio error=0`, `verify_status=pass`, `SLC_MIGRATION_CNT=38380`, `USER_READ_TLC_PAGES=6563552`
 - `./scripts/run_local_slc_policy_compare.sh verify 0/1/2/3` 새 run 4개 모두 통과.
   - `results/local_20260825_170050_slc_verify_policy0/`
   - `results/local_20260825_170446_slc_verify_policy1/`
@@ -182,9 +201,9 @@
 
 ## 다음 세션 시작점
 
-- 다음 세션은 로컬 `~/nvmevirt`에서 시작하는 것을 우선으로 한다.
+- 다음 세션은 로컬 고정이 아니다. `sudo`, `make`, `fio`가 실제로 되는 일반 서버 shell 또는 로컬 VM 중 실행 가능한 쪽에서 시작한다.
 - 시작 확인 순서는 `git status --short`, `ls -td results/*hotcold_v7_local_fix2* | head`, `sed -n '1,220p' docs/CURRENT_TASK.md`, `sed -n '1,220p' scripts/run_experiment.sh` 정도면 충분하다.
-- 목표는 `zipf_nrm` 4회분과 `hotcold_v7_local_fix2`를 묶어 최종 비교 표와 본문을 만드는 것이다.
+- 그 다음 목표는 서버 실측을 확보한 뒤 `zipf_nrm` 4회분과 `hotcold_v7_local_fix2`를 묶어 최종 비교 표와 본문을 만드는 것이다.
 
 ## 참고 문서
 

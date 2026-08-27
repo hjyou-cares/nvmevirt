@@ -145,6 +145,17 @@ append_debug_counters() {
   done
 }
 
+print_debug_counter_subset() {
+  local debug_file="$1"
+  local pattern='SLC_MIGRATION_CNT|SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT|TLC_GC_CNT|TLC_GC_VALID_PAGE_MIGRATE_CNT|USER_.*_PAGES|INTERNAL_.*_PAGES'
+
+  if command -v rg >/dev/null 2>&1; then
+    rg "$pattern" "$debug_file" || true
+  else
+    grep -E "$pattern" "$debug_file" || true
+  fi
+}
+
 run_baseline_once() {
   local slc_ratio="$1"
   local label="$2"
@@ -252,8 +263,7 @@ run_validation_case() {
   cleanup_mount
 
   echo "result_dir=$outdir"
-  rg 'SLC_MIGRATION_CNT|SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT|TLC_GC_CNT|TLC_GC_VALID_PAGE_MIGRATE_CNT|USER_.*_PAGES|INTERNAL_.*_PAGES' \
-    "$outdir/debug.txt" || true
+  print_debug_counter_subset "$outdir/debug.txt"
 }
 
 run_slc_only() {

@@ -84,7 +84,6 @@ struct line_mgmt {
 
 struct write_flow_control {
 	uint32_t write_credits;
-	uint32_t credits_to_refill;
 };
 
 struct slc_cache_layout {

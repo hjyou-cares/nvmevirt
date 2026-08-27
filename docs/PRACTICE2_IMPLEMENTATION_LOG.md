@@ -624,3 +624,61 @@
 
 - 로컬 `zipf_nrm`에서는 순위가 안정적이지만, `hotcold v7`에서도 같은 방향인지 아직 모른다.
 - VS Code Remote 단절은 대개 `umount/rmmod/insmod/mkfs/mount` 경계에서 발생하므로, 다음 로컬 반복 실행은 `tmux` 안에서 진행하는 편이 안전하다.
+
+## 2026-08-27: guarded reclaim/write-credit + reserve admission control 검증
+
+### 확인한 내용
+
+- `random hotcold full`에서 `No data available`와 함께 `Refusing TLC GC: victim line 832 does not fit current TLC GC capacity`가 반복됐다.
+- 첫 guarded patch만으로는 fit 불가능한 victim을 같은 기준으로 반복 선택하는 문제가 남아 있었다.
+- `hotcold`는 `zipf`보다 오래된 고-vpc line을 더 오래 유지해 SLC migration/TLC GC capacity 충돌을 더 쉽게 드러냈다.
+
+### 변경한 내용
+
+- `conv_ftl.c`
+  - reclaim 시작 전 TLC GC capacity precheck를 넣었다.
+  - TLC GC 성공 시에만 write credit를 refill하도록 바꿨다.
+  - host write path에서 `advance_write_pointer()`가 hidden reclaim을 호출하지 않게 정리했다.
+  - fit 가능한 victim만 선택하도록 TLC GC/SLC migration victim selection을 수정했다.
+  - SLC migration 후에도 TLC GC 1 line capacity를 남기도록 reserve-style admission control을 추가했다.
+- `conv_ftl.h`
+  - 더 이상 쓰지 않는 `credits_to_refill` 필드를 제거했다.
+- 인계 문서
+  - `docs/CODEX_BOOTSTRAP.md`
+  - `docs/CURRENT_TASK.md`
+
+### 변경 이유
+
+- 기존 경로는 reclaim/write-credit 실패가 hang 대신 `WRITE_FAULT`로 올라오게 만드는 데는 진전이 있었지만, TLC capacity에 맞지 않는 victim을 반복 선택해 `full`에서 계속 실패할 수 있었다.
+- `hotcold full`을 안전하게 끝내려면 migration admission control이 TLC GC runway를 보존해야 했다.
+
+### 검증 결과
+
+- 실패 흔적:
+  - `results/20260827_191221_slcpolicy1_random_hotcold_server_random_full_guarded/`
+  - `results/20260827_192227_slcpolicy1_random_hotcold_server_random_full_guarded/`
+  - 둘 다 `fio.json` 기준 `error=61`
+- 성공 run:
+  - `overflow` 재검증
+    - [results/local_20260827_193407_slc_overflow_validation](/home/hjyoo/nvmevirt2/results/local_20260827_193407_slc_overflow_validation)
+    - `SLC_MIGRATION_CNT=1476`
+    - `USER_READ_TLC_PAGES=476118`
+    - `INTERNAL_WRITE_TLC_PAGES=566781`
+  - `hotcold full guarded`
+    - [results/20260827_192853_slcpolicy1_random_hotcold_server_random_full_guarded](/home/hjyoo/nvmevirt2/results/20260827_192853_slcpolicy1_random_hotcold_server_random_full_guarded)
+    - [results/20260827_193453_slcpolicy0_greedy_hotcold_server_greedy_full_guarded](/home/hjyoo/nvmevirt2/results/20260827_193453_slcpolicy0_greedy_hotcold_server_greedy_full_guarded)
+    - [results/20260827_193630_slcpolicy2_fifo_hotcold_server_fifo_full_guarded](/home/hjyoo/nvmevirt2/results/20260827_193630_slcpolicy2_fifo_hotcold_server_fifo_full_guarded)
+    - [results/20260827_193804_slcpolicy3_costbenefit_hotcold_server_cb_full_guarded](/home/hjyoo/nvmevirt2/results/20260827_193804_slcpolicy3_costbenefit_hotcold_server_cb_full_guarded)
+    - `slc_migrate_pages` 순위: `FIFO < Cost-Benefit < Greedy < Random`
+    - `max erase` 최소: FIFO(`25`)
+  - `CRC verify policy1`
+    - [results/local_20260827_194155_slc_verify_policy1](/home/hjyoo/nvmevirt2/results/local_20260827_194155_slc_verify_policy1)
+    - `fio error=0`
+    - `verify_status=pass`
+    - `SLC_MIGRATION_CNT=38380`
+    - `USER_READ_TLC_PAGES=6563552`
+
+### 남은 위험
+
+- 오늘 성공한 `CRC verify`는 `policy 1` 한 세트만 추가 확인했다.
+- 최종 보고서용으로는 `baseline/SLC-on`, 서버 `zipf_nrm`, 서버 `hotcold full guarded`를 같은 CSV 형식으로 묶어 비교표를 정리해야 한다.

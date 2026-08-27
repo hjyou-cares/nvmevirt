@@ -1,0 +1,1 @@
+fio --name=verify_crc --filename=/home/hjyoo/nvme_mount/verifyfile --size=6G --rw=randwrite --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=10 --verify=crc32c --verify_fatal=1 --verify_state_save=0 --do_verify=1 --group_reporting

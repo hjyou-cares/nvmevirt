@@ -13,9 +13,10 @@
 
 - 권장 실습1 기준 commit: `ae28ab11cd11769358c0bc578ee65f055b28c5a9`
 - 현재 작업 branch: `practice2-slc-cache`
-- 최신 작업 commit은 `8aa39ca` (`Add SLC migration scaffolding and session docs`)다.
-- 서버 `~/nvmevirt`도 `practice2-slc-cache`의 `8aa39ca`까지 동기화됐다.
-- 현재 worktree에는 로컬 실행용 스크립트 `scripts/run_local_slc_policy_compare.sh`와 로컬 실험 결과 디렉터리가 추가돼 있다.
+- 현재 worktree HEAD는 `09f41ac` (`Add SLC validation workflow and runtime ratio control`)다.
+- 원격 `origin/practice2-slc-cache`도 `09f41ac`와 일치한다.
+- 서버 형제 저장소 `~/nvmevirt`는 아직 `9eb9f0b` 기준 `nvmev.ko`만 남아 있어, 현재 검증/실험에는 재빌드가 필요하다.
+- 현재 worktree에는 `conv_ftl.c`, `conv_ftl.h` 중심의 guarded reclaim/write-credit WIP가 있다.
 
 ## 현재까지 구현된 흐름
 
@@ -45,25 +46,33 @@
 - 같은 날 host/migration write pointer는 `slc_wp/tlc_wp/tlc_gc_wp`를 직접 쓰도록 바꿨고, free/full/victim list와 PQ도 `slc_lm/tlc_lm`로 직접 나눴다.
 - 2026-08-25 새 `verify 0/1/2/3`도 모두 통과했고, 예전 빈 verify 실패 흔적 2개는 삭제했다.
 - `scripts/collect_summary.sh`는 이제 migration counter와 workload 조건까지 CSV로 집계한다.
+- `slc_cache_ratio_percent` insmod parameter가 추가돼, 같은 빌드 산출물로 `0`(TLC-only baseline)과 `10`(SLC cache on)을 런타임에 바꿔 실험할 수 있다.
+- `/proc/nvmev/debug`에는 `USER_*_SLC/TLC_PAGES`, `INTERNAL_*_SLC/TLC_PAGES`가 추가돼 SLC-only/overflow 검증 근거를 직접 뽑을 수 있다.
+- `scripts/run_local_slc_validation.sh`가 추가돼 `baseline`, `slc_only`, `overflow`, `all` 모드로 1번 결과물 검증을 자동화했다.
+- 2026-08-27 현재 worktree WIP에는 reclaim 시작 전 TLC GC capacity precheck, TLC GC 성공 시에만 write credit refill, host write path의 hidden reclaim 제거가 들어갔다.
+- 같은 날 추가 WIP로 SLC migration이 reclaim 후에도 TLC GC 1 line capacity를 남기도록 reserve-style admission control이 들어갔다.
+- 2026-08-27 서버 일반 shell에서 guarded/reserve WIP 기준 `random hotcold full`, `greedy/fifo/cost-benefit hotcold full`, `overflow` 재검증, `CRC verify policy1`까지 성공했다.
 
 ## 아직 안 된 것
 
 - `SLC_CACHE_RATIO_PERCENT` 기본값은 현재 `10`이다.
-- `zipf_nrm` 4회분을 표/본문으로 최종 정리하는 작업이 남아 있다.
-- `zipf_nrm` 4회분과 최신 `hotcold_v7_local_fix2` 1회분을 묶은 최종 요약 표/본문 정리가 남아 있다.
-- 내 현재 shell에는 `make`/`gcc`/`clang`이 없지만, VM 쪽 `make`는 사용자 확인 기준으로 정상 동작한다.
+- 서버에서 현재 코드(`09f41ac`)로 새 `nvmev.ko`를 빌드한 뒤 baseline(`0`) vs SLC-on(`10`) 실측을 다시 수집해야 한다.
+- 서버에서 `SLC-only` / `overflow` 검증을 다시 돌려 `USER_*_PAGES`, `INTERNAL_*_PAGES` 근거를 확보해야 한다.
+- 서버 baseline(`0`) vs SLC-on(`10`) 실측 run과 집계가 아직 안 끝났다.
+- 서버 `zipf_nrm` / `hotcold` 최종 비교표와 보고서 본문 정리가 남아 있다.
+- 현재 Codex 서버 세션에서는 `sudo`, `lsblk`, `/proc`, `/sys` 접근이 막혀 있어 모듈 로드와 실험 실행을 직접 수행할 수 없다.
 
 ## 다음 우선순위
 
-1. `zipf_nrm` 4회분과 최신 `hotcold_v7_local_fix2` 결과를 묶어 정책별 요약 표를 만든다.
-2. 표를 바탕으로 정책별 장단점 본문을 정리한다.
-3. 필요하면 `TLC_GC_CNT > 0` workload 1세트를 추가해 결과 해석을 보강한다.
-4. 필요하면 line metadata 저장소까지 더 분리할지 결정한다.
+1. `./scripts/collect_summary.sh > /tmp/nvmevirt_summary.csv`로 현재 결과를 먼저 CSV로 모은다.
+2. 서버 baseline(`slc_cache_ratio_percent=0`) vs SLC-on(`10`) 결과를 최종 표용으로 정리한다.
+3. 서버 `zipf_nrm` 4정책과 `hotcold full guarded` 4정책을 표로 묶는다.
+4. migration/GC counter와 erase 통계를 바탕으로 보고서 본문을 작성한다.
 
 ## 작업 시 주의사항
 
 - 시작할 때 긴 조사 문서를 전부 다시 읽지 않는다.
-- 다음 세션은 우선 로컬 `~/nvmevirt`에서 시작한다.
+- 다음 세션 시작점은 로컬 고정이 아니다. 현재 작업본 `~/nvmevirt2`와 서버 일반 shell 중, `sudo`/`make`/`fio`가 실제로 되는 쪽을 우선 사용한다.
 - 현재 흐름 확인은 `git status`, `git diff --stat`, `docs/CURRENT_TASK.md`로 끝낸다.
 - 과제 공식 문구가 다시 필요할 때만 `docs/PRACTICE2_AGENTS`를 읽는다.
 - 실습1의 TLC GC 정책과 실습2의 SLC migration 정책을 같은 문제로 취급하지 않는다.
@@ -73,6 +82,8 @@
 - 2026-08-25 이전 `results/*hotcold_v7_local/` 첫 실행은 `stonewall` 버그가 섞인 결과라 최종 비교에서는 제외한다.
 - 현재 최종 비교 기준 `hotcold` 세트는 `*hotcold_v7_local_fix2*`다.
 - 로컬에서 반복 실행 중 VS Code Remote가 끊기면 대체로 `rmmod -> insmod -> mkfs -> mount` 재초기화 경계에서 guest가 잠깐 멎는 경우이므로 `tmux` 안에서 돌리는 편이 안전하다.
+- 2026-08-27 현재 Codex 서버 세션에서는 `sudo`, `lsblk`, `/proc`, `/sys`가 막혀 있으므로, 실제 insmod/mkfs/mount/fio 실행은 일반 로그인 shell에서 해야 한다.
+- `results/20260827_191221_*`와 `results/20260827_192227_*`는 `random full guarded` 실패 흔적이고, 최종 집계에서는 제외한다.
 - 집계 자동화 확인은 `./scripts/collect_summary.sh > /tmp/nvmevirt_summary.csv`로 먼저 검증한다.
 - `results/20260824_173844_slcpolicy1_random_zipf_nrm_rep2/`는 비어 있는 실패 흔적이라 집계 대상이 아니다.
 - `results/*zipf_nrm_rep2_rerun`와 `results/*zipf_nrm_rep3` 중 `meta.txt`/`summary.txt`가 없는 디렉터리는 중간 실패 흔적이므로 집계 대상이 아니다.
