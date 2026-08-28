@@ -9,6 +9,8 @@
 - 2026-08-26 현재 worktree에는 `slc_cache_ratio_percent` insmod parameter가 추가돼, 같은 빌드 산출물로 `0`(TLC-only baseline)과 `10`(SLC cache on)을 런타임에 바꿔 실험할 수 있게 정리 중이다.
 - `/proc/nvmev/debug`에는 이제 `USER_*_SLC/TLC_PAGES`, `INTERNAL_*_SLC/TLC_PAGES`가 추가돼 SLC-only/overflow 검증에서 host/internal read/write가 어느 media로 갔는지 직접 확인할 수 있게 됐다.
 - `scripts/collect_summary.sh`는 이제 `slc_cache_ratio_percent`, `write_bw_kib`, `write_iops`, `read_bw_kib`, `read_iops`, read/write latency를 함께 CSV로 모은다.
+- 2026-08-28 현재 `scripts/collect_summary.sh`는 `results/**/meta.txt`를 재귀 수집하므로 `local_*_slc_baseline_compare/{tlc_only,slc_on}` 같은 중첩 run도 CSV에 포함된다.
+- 같은 수정으로 baseline 메타의 `baseline_size`/`baseline_loops`, `variant`/`mode`도 기존 CSV 필드(`uniform_size`, `uniform_loops`, `label`, `workload`)로 fallback 집계된다.
 - 새 로컬 검증 스크립트 `scripts/run_local_slc_validation.sh`가 추가됐다. `baseline`, `slc_only`, `overflow`, `all` 모드로 1번 결과물용 실험을 바로 돌리도록 만든 상태다.
 - 로컬 VM 기준 `make`, smoke, CRC verify, `zipf_nrm`, `hotcold_v7_local_fix2`까지 사용자 확인으로 정상 수행됐다.
 - 서버 형제 저장소 `~/nvmevirt`에는 `9eb9f0b` 시점의 `nvmev.ko`만 확인됐고, 현재 HEAD `09f41ac`와는 커널 코드 차이가 있어 재빌드 없이 재사용하면 안 된다.
@@ -23,14 +25,13 @@
 ## 다음에 바로 할 일
 
 1. `./scripts/collect_summary.sh > /tmp/nvmevirt_summary.csv`로 오늘까지의 결과를 CSV로 모은다.
-2. baseline(`slc_cache_ratio_percent=0`) vs SLC-on(`10`) 결과를 최종 표용으로 정리한다.
+2. `1-1 baseline`, `1-2 SLC-only`, `1-3 overflow` 결과를 표와 그림으로 정리한다.
 3. 서버 `zipf_nrm` 4정책과 `hotcold full guarded` 4정책을 같은 형식으로 정리한다.
 4. `slc_migrate_pages`, `tlc_gc_cnt`, `erase sum`, `erase max`, `erase_cv_all` 중심으로 비교표를 만든다.
 5. 그 기준으로 보고서 본문을 작성한다.
 
 ## 미구현 핵심 항목
 
-- 서버 baseline(`slc_cache_ratio_percent=0`) vs SLC-on 실측 run
 - 결과 표/본문 정리
 - `collect_summary.sh` 기반 최종 CSV 정리
 - 실패 흔적 run 제외 기준 정리
@@ -46,7 +47,6 @@
 - 정책 비교는 반드시 `umount -> rmmod -> insmod -> mkfs -> mount`의 fresh reload 조건으로 수행한다.
 - 로컬 VM은 용량이 작아 `No space left on device` 같은 파일시스템 노이즈가 섞이기 쉽다. 최종 실측과 결과 표는 서버 결과만 기준으로 쓴다.
 - `scripts/run_local_slc_validation.sh`는 `SLC_RATIO_OFF=0`, `SLC_RATIO_ON=10`을 기본으로 baseline/validation을 구성한다. `OVERFLOW_SIZE`가 너무 작아 migration이 안 보이면 더 키워야 한다.
-- `results/20260827_191221_slcpolicy1_random_hotcold_server_random_full_guarded/`와 `results/20260827_192227_slcpolicy1_random_hotcold_server_random_full_guarded/`는 실패 흔적이라 최종 집계에서 제외한다.
 - 로컬 `zipf_nrm` 재실행은 `RANDOM_DIST=zipf:1.2 NORANDOMMAP=1 UNIFORM_SIZE=600M UNIFORM_LOOPS=10 TLC_GC_POLICY=0`를 반드시 명시한다. 빠뜨리면 기본 `uniform 600M x 250`가 돌아간다.
 - 로컬에서 정책별 `for` 루프를 돌릴 때 VS Code Remote가 끊기면 대개 `umount/rmmod/insmod/mkfs/mount` 재초기화 경계 문제라서 `tmux` 안에서 실행하는 편이 안전하다.
 - active I/O path는 `slc_wp/tlc_wp/tlc_gc_wp`와 `slc_lm/tlc_lm` 기준으로 나뉘었지만, line metadata 저장소는 아직 `conv_ftl->lines` 하나를 공유한다.
@@ -57,6 +57,10 @@
 ## 최신 검증 요약
 
 - 로컬 VM에서 `make` 정상 동작 확인.
+- 2026-08-28 서버 일반 shell에서 `baseline` 최종 실측도 완료했다.
+  - `results/local_20260828_113345_slc_baseline_compare/tlc_only/`: `slc_cache_ratio_percent=0`, `write_bw_kib=1383760`, `write_iops=345940.135565`, `write_lat_avg_ns=45986.563729`, `write_lat_p99_ns=146432`
+  - `results/local_20260828_113345_slc_baseline_compare/slc_on/`: `slc_cache_ratio_percent=10`, `write_bw_kib=841641`, `write_iops=210410.374015`, `write_lat_avg_ns=75815.745342`, `write_lat_p99_ns=634880`
+  - `slc_on`에서는 `SLC_MIGRATION_CNT=102812`, `SLC_MIGRATION_VALID_PAGE_MIGRATE_CNT=39472631`, `INTERNAL_WRITE_TLC_PAGES=39472631`가 확인돼 baseline 조건이 SLC cache upside보다 overflow/migration cost를 크게 드러내는 쪽으로 해석된다.
 - 2026-08-27 서버 일반 shell에서 guarded/reserve WIP 기준 `hotcold full guarded` 4정책이 모두 성공했다.
   - Greedy(`0`) `results/20260827_193453_slcpolicy0_greedy_hotcold_server_greedy_full_guarded/`: `sum=361104`, `max=41`, `slc_migrate_pages=18352180`, `tlc_gc_cnt=18828`
   - Random(`1`) `results/20260827_192853_slcpolicy1_random_hotcold_server_random_full_guarded/`: `sum=375216`, `max=42`, `slc_migrate_pages=18794946`, `tlc_gc_cnt=19670`

@@ -255,6 +255,9 @@ static inline void victim_line_set_pos(void *a, size_t pos)
 
 static inline void consume_write_credit(struct conv_ftl *conv_ftl)
 {
+	if (conv_ftl->slc_layout.slc_line_cnt == 0)
+		return;
+
 	if (conv_ftl->wfc.write_credits == 0) {
 		NVMEV_ERROR("TLC write issued with no write credits available\n");
 		return;
@@ -273,6 +276,15 @@ static struct write_pointer *__get_wp(struct conv_ftl *ftl, uint32_t io_type);
 
 static int ensure_write_credit_available(struct conv_ftl *conv_ftl)
 {
+	/*
+	 * TLC-only baseline writes directly into free TLC lines, so forcing
+	 * foreground GC on credit exhaustion can deadlock before any victim line
+	 * exists. Keep the guarded credit path only for SLC-cache mode, where TLC
+	 * space must be reserved for migration/GC copies.
+	 */
+	if (conv_ftl->slc_layout.slc_line_cnt == 0)
+		return 0;
+
 	if (conv_ftl->wfc.write_credits > 0)
 		return 0;
 

@@ -46,6 +46,7 @@
 - 같은 날 host/migration write pointer는 `slc_wp/tlc_wp/tlc_gc_wp`를 직접 쓰도록 바꿨고, free/full/victim list와 PQ도 `slc_lm/tlc_lm`로 직접 나눴다.
 - 2026-08-25 새 `verify 0/1/2/3`도 모두 통과했고, 예전 빈 verify 실패 흔적 2개는 삭제했다.
 - `scripts/collect_summary.sh`는 이제 migration counter와 workload 조건까지 CSV로 집계한다.
+- 2026-08-28 현재 `scripts/collect_summary.sh`는 `results/**/meta.txt`를 재귀 집계하고, baseline validation의 중첩 디렉터리도 CSV에 포함한다.
 - `slc_cache_ratio_percent` insmod parameter가 추가돼, 같은 빌드 산출물로 `0`(TLC-only baseline)과 `10`(SLC cache on)을 런타임에 바꿔 실험할 수 있다.
 - `/proc/nvmev/debug`에는 `USER_*_SLC/TLC_PAGES`, `INTERNAL_*_SLC/TLC_PAGES`가 추가돼 SLC-only/overflow 검증 근거를 직접 뽑을 수 있다.
 - `scripts/run_local_slc_validation.sh`가 추가돼 `baseline`, `slc_only`, `overflow`, `all` 모드로 1번 결과물 검증을 자동화했다.
@@ -56,16 +57,14 @@
 ## 아직 안 된 것
 
 - `SLC_CACHE_RATIO_PERCENT` 기본값은 현재 `10`이다.
-- 서버에서 현재 코드(`09f41ac`)로 새 `nvmev.ko`를 빌드한 뒤 baseline(`0`) vs SLC-on(`10`) 실측을 다시 수집해야 한다.
 - 서버에서 `SLC-only` / `overflow` 검증을 다시 돌려 `USER_*_PAGES`, `INTERNAL_*_PAGES` 근거를 확보해야 한다.
-- 서버 baseline(`0`) vs SLC-on(`10`) 실측 run과 집계가 아직 안 끝났다.
 - 서버 `zipf_nrm` / `hotcold` 최종 비교표와 보고서 본문 정리가 남아 있다.
 - 현재 Codex 서버 세션에서는 `sudo`, `lsblk`, `/proc`, `/sys` 접근이 막혀 있어 모듈 로드와 실험 실행을 직접 수행할 수 없다.
 
 ## 다음 우선순위
 
 1. `./scripts/collect_summary.sh > /tmp/nvmevirt_summary.csv`로 현재 결과를 먼저 CSV로 모은다.
-2. 서버 baseline(`slc_cache_ratio_percent=0`) vs SLC-on(`10`) 결과를 최종 표용으로 정리한다.
+2. `1-1 baseline`, `1-2 SLC-only`, `1-3 overflow` 결과를 표/그림으로 정리한다.
 3. 서버 `zipf_nrm` 4정책과 `hotcold full guarded` 4정책을 표로 묶는다.
 4. migration/GC counter와 erase 통계를 바탕으로 보고서 본문을 작성한다.
 
@@ -83,7 +82,6 @@
 - 현재 최종 비교 기준 `hotcold` 세트는 `*hotcold_v7_local_fix2*`다.
 - 로컬에서 반복 실행 중 VS Code Remote가 끊기면 대체로 `rmmod -> insmod -> mkfs -> mount` 재초기화 경계에서 guest가 잠깐 멎는 경우이므로 `tmux` 안에서 돌리는 편이 안전하다.
 - 2026-08-27 현재 Codex 서버 세션에서는 `sudo`, `lsblk`, `/proc`, `/sys`가 막혀 있으므로, 실제 insmod/mkfs/mount/fio 실행은 일반 로그인 shell에서 해야 한다.
-- `results/20260827_191221_*`와 `results/20260827_192227_*`는 `random full guarded` 실패 흔적이고, 최종 집계에서는 제외한다.
 - 집계 자동화 확인은 `./scripts/collect_summary.sh > /tmp/nvmevirt_summary.csv`로 먼저 검증한다.
 - `results/20260824_173844_slcpolicy1_random_zipf_nrm_rep2/`는 비어 있는 실패 흔적이라 집계 대상이 아니다.
 - `results/*zipf_nrm_rep2_rerun`와 `results/*zipf_nrm_rep3` 중 `meta.txt`/`summary.txt`가 없는 디렉터리는 중간 실패 흔적이므로 집계 대상이 아니다.

@@ -5,6 +5,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+infer_timestamp_from_path() {
+  local path="$1"
+
+  printf '%s\n' "$path" | sed -nE 's#.*(local_[0-9]{8}_[0-9]{6}|[0-9]{8}_[0-9]{6}).*#\1#p' | head -n1
+}
+
 get_meta_value() {
   local file="$1"
   local key="$2"
@@ -63,13 +69,11 @@ get_fio_value() {
 
 echo "timestamp,policy,policy_name,policy_target,label,workload,slc_migration_policy,tlc_gc_policy,slc_cache_ratio_percent,random_dist,norandommap,uniform_size,uniform_loops,cold_size,cold_touch_size,hot_size,hotcold_runtime,memmap_size,nonzero_blocks,erase_sum,erase_max,slc_migration_cnt,slc_migrate_pages,tlc_gc_cnt,tlc_gc_migrate_pages,legacy_gc_migrate_pages,erase_cv,erase_cv_all,write_bw_kib,write_iops,write_lat_avg_ns,write_lat_p99_ns,read_bw_kib,read_iops,read_lat_avg_ns,read_lat_p99_ns"
 
-for dir in "$REPO_ROOT"/results/*/; do
-  meta_file="$dir/meta.txt"
+while IFS= read -r -d '' meta_file; do
+  dir="${meta_file%/meta.txt}"
   summary_file="$dir/summary.txt"
   fio_file="$dir/fio.json"
   debug_file=""
-
-  [ -f "$meta_file" ] || continue
 
   if [ -f "$dir/debug.txt" ]; then
     debug_file="$dir/debug.txt"
@@ -78,6 +82,7 @@ for dir in "$REPO_ROOT"/results/*/; do
   fi
 
   timestamp=$(get_meta_value "$meta_file" "timestamp")
+  [ -n "$timestamp" ] || timestamp=$(infer_timestamp_from_path "$dir")
   policy=$(get_first_meta_value "$meta_file" "policy" "slc_migration_policy")
   policy_name=$(get_meta_value "$meta_file" "policy_name")
   policy_target=$(get_meta_value "$meta_file" "policy_target")
@@ -88,13 +93,15 @@ for dir in "$REPO_ROOT"/results/*/; do
   slc_cache_ratio_percent=$(get_meta_value "$meta_file" "slc_cache_ratio_percent")
   random_dist=$(get_meta_value "$meta_file" "random_dist")
   norandommap=$(get_meta_value "$meta_file" "norandommap")
-  uniform_size=$(get_meta_value "$meta_file" "uniform_size")
-  uniform_loops=$(get_meta_value "$meta_file" "uniform_loops")
+  uniform_size=$(get_first_meta_value "$meta_file" "uniform_size" "baseline_size")
+  uniform_loops=$(get_first_meta_value "$meta_file" "uniform_loops" "baseline_loops")
   cold_size=$(get_meta_value "$meta_file" "cold_size")
   cold_touch_size=$(get_meta_value "$meta_file" "cold_touch_size")
   hot_size=$(get_meta_value "$meta_file" "hot_size")
   hotcold_runtime=$(get_meta_value "$meta_file" "hotcold_runtime")
   memmap_size=$(get_meta_value "$meta_file" "memmap_size")
+  [ -n "$label" ] || label=$(get_first_meta_value "$meta_file" "variant" "mode")
+  [ -n "$workload" ] || workload=$(get_meta_value "$meta_file" "mode")
 
   nonzero_blocks=$(get_summary_value "$summary_file" "nonzero_blocks")
   erase_sum=$(get_summary_value "$summary_file" "sum")
@@ -129,4 +136,4 @@ for dir in "$REPO_ROOT"/results/*/; do
   read_lat_p99_ns=$(get_fio_value "$fio_file" '.jobs[-1].read.clat_ns.percentile["99.000000"]')
 
   echo "$timestamp,$policy,$policy_name,$policy_target,$label,$workload,$slc_migration_policy,$tlc_gc_policy,$slc_cache_ratio_percent,$random_dist,$norandommap,$uniform_size,$uniform_loops,$cold_size,$cold_touch_size,$hot_size,$hotcold_runtime,$memmap_size,$nonzero_blocks,$erase_sum,$erase_max,$slc_migration_cnt,$slc_migrate_pages,$tlc_gc_cnt,$tlc_gc_migrate_pages,$legacy_gc_migrate_pages,$erase_cv,$erase_cv_all,$write_bw_kib,$write_iops,$write_lat_avg_ns,$write_lat_p99_ns,$read_bw_kib,$read_iops,$read_lat_avg_ns,$read_lat_p99_ns"
-done
+done < <(find "$REPO_ROOT/results" -type f -name meta.txt -print0 | sort -z)
