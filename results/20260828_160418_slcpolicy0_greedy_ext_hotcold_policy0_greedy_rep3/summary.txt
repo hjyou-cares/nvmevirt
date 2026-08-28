@@ -1,0 +1,1 @@
+nonzero_blocks=92928 sum=383132 max=38 slc_migration_cnt=75762 slc_migrate_pages=18918549 tlc_gc_cnt=20021 tlc_gc_migrate_pages=92428 legacy_gc_migrate_pages=92428 total_gc=20021 greedy_vs_cb_identity_diverge=6969 avg_greedy_vpc=4.617 avg_cb_vpc=4.707 avg_abs_vpc_diff=0.091 same_vpc_different_line_ratio=0.7503 erase_cv=1.9388 erase_cv_all=2.3900

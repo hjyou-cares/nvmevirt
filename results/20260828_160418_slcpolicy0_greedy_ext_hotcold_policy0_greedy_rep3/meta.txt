@@ -1,0 +1,27 @@
+timestamp=20260828_160418
+experiment_suite=policy_repeat
+experiment_variant=hotcold
+experiment_rep=3
+policy=0
+policy_name=greedy
+policy_target=slc_migration
+label=ext_hotcold_policy0_greedy_rep3
+workload=hotcold
+uniform_size=22G
+uniform_loops=7
+random_dist=uniform
+norandommap=0
+fio_randrepeat=1
+cold_size=30G
+cold_touch_size=15G
+hot_size=1G
+hotcold_runtime=90
+disk_condition=fresh_module_reload_and_mkfs
+nvme_dev=/dev/nvme1n1
+memmap_start=16G
+memmap_size=48G
+cpus=7,8
+tlc_gc_policy=0
+slc_migration_policy=0
+slc_cache_ratio_percent=10
+fio_cmd=COLD_SIZE=30G COLD_TOUCH_SIZE=15G HOT_SIZE=1G HOTCOLD_RUNTIME=90 fio /home/hjyoo/nvmevirt2/scripts/workloads/hotcold.fio --directory=$MOUNT_DIR
