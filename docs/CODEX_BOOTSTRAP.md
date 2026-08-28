@@ -86,6 +86,9 @@
 - `report/make_practice2_extended_figures.py`는 60개 조건 완성 여부를 검사하고 raw/aggregate
   CSV 및 평균±표준편차 그래프 4개를 생성한다.
 - 실행 방법과 매트릭스는 `docs/PRACTICE2_EXTENDED_EXPERIMENTS.md`에 정리했다.
+- 추가 실험 실행 준비 변경은 commit `f32ded2` (`Expand Practice 2 report and experiment workflow`)에 저장돼 있다.
+- GitHub HTTPS 인증 문제로 push는 아직 실패했을 수 있으므로, 다음 세션에서 원격 반영 여부를 확인한다.
+- 실험 중에는 source/workload 파일을 수정하지 않고, 결과 생성 후에만 보고서와 그래프를 갱신한다.
 
 ## 다음 우선순위
 

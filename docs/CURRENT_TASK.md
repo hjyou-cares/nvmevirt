@@ -54,6 +54,12 @@
 - `report/make_practice2_extended_figures.py`에 완성도 검사, raw/aggregate CSV, error bar 그래프 4개 생성을 구현했다.
 - 실행 가이드는 `docs/PRACTICE2_EXTENDED_EXPERIMENTS.md`다.
 - 현재 Codex shell에는 `fio`가 없어 실제 run은 아직 시작하지 못했으며, 일반 서버 shell에서 실행해야 한다.
+- 추가 실험 실행 준비 변경은 commit `f32ded2` (`Expand Practice 2 report and experiment workflow`)에 저장돼 있다.
+- `git push`는 GitHub HTTPS 인증 정보가 없어 실패했다. 따라서 원격에는 아직 이 commit이 반영되지 않았을 수 있다.
+- 서버에서 현재 checkout이 `f32ded2`를 포함하고 있다면 push 없이 바로 실험을 실행할 수 있다.
+- 추가 실험은 `tmux`에서 `./scripts/run_practice2_extended_experiments.sh all`로 실행하며, 완료된 label은 자동 skip되어 중단 후 재개된다.
+- 실험 매트릭스는 ratio 24회, Zipf/Hot-cold policy repeat 24회, Uniform sensitivity 12회로 총 60회다.
+- 실험 완료 후 `python3 report/make_practice2_extended_figures.py`를 실행해 결과 CSV와 error-bar 그래프를 생성한다.
 
 ## 다음에 바로 할 일
 
@@ -61,6 +67,18 @@
 2. `ratio -> policy -> sensitivity` 순서로 60개 추가 실험을 실행한다.
 3. 확장 CSV/그래프를 생성해 보고서의 비율 근거, 반복 통계, workload 타당성 절을 추가한다.
 4. 확정 원고를 스타일 적용 DOCX와 PDF 변환용 결과물로 생성한다.
+
+## 새 세션 인계 메모
+
+- 현재 목표는 보고서 점수 보강용 추가 실험 60회를 완료하는 것이다.
+- 사용자가 서버 shell에서 실험을 시작했거나 시작할 예정이다. 이 세션에서는 실제 fio 실행을 하지 않는다.
+- 서버에서 실행할 명령:
+  - `export NVME_DEV=/dev/nvme1n1 MEMMAP_START=16G MEMMAP_SIZE=48G NVME_CPUS=7,8`
+  - `tmux new -A -s p2-extra`
+  - `./scripts/run_practice2_extended_experiments.sh all`
+- 다음 세션 시작 시 먼저 `git status --short`, `git log -1 --oneline`, `docs/CURRENT_TASK.md`를 확인한다.
+- 실험 결과가 있으면 `python3 report/make_practice2_extended_figures.py`로 60개 완성 여부를 확인한 뒤, `report/PRACTICE2_REPORT_DRAFT.md`의 ratio 근거·반복 통계·workload sensitivity 부분을 갱신한다.
+- 현재 작업본에서 추가 수정이 필요하면 실험이 끝난 뒤 진행한다. 실험 중에는 `conv_ftl.c`, workload 설정, 실행 스크립트를 바꾸지 않아 결과 조건을 고정한다.
 
 ## 미구현 핵심 항목
 
