@@ -1,3 +1,21 @@
+> ## 📄 실습 2 제출물 안내
+>
+> 이 저장소에는 **실습 2: SLC cache 기반 이기종 SSD 구현 및 성능 분석** 결과가 포함되어 있습니다. SLC에 host write를 우선 배치하고, SLC가 가득 차면 TLC로 migration하도록 Conventional FTL을 확장했습니다. SLC migration victim 정책(Greedy / Random / FIFO / Cost-Benefit)을 구현하고, TLC-only baseline과 비교해 resident·overflow·sustained 구간에서 SLC의 이점과 비용을 분석했습니다.
+> 제출자: **유형진 (인턴)**
+>
+> | 항목 | 위치 |
+> |---|---|
+> | **보고서 (Markdown 원본)** | [`report/REPORT.md`](report/REPORT.md) |
+> | **보고서 (Word 제출본)** | [`report/PRACTICE2_REPORT.docx`](report/PRACTICE2_REPORT.docx) |
+> | 보고서 그래프 | [`report/figures/`](report/figures) — 확장 실험 및 SLC crossover 결과 포함 |
+> | 핵심 구현 코드 | [`conv_ftl.c`](conv_ftl.c) / [`conv_ftl.h`](conv_ftl.h), [`ssd.c`](ssd.c) / [`ssd.h`](ssd.h), [`ssd_config.h`](ssd_config.h), [`main.c`](main.c) |
+> | 실험 및 집계 스크립트 | [`scripts/`](scripts), [`report/make_practice2_extended_figures.py`](report/make_practice2_extended_figures.py) |
+> | 실험 결과 원본·집계 | [`results/`](results), [`report/extended_results/`](report/extended_results), [`report/crossover_results/`](report/crossover_results) |
+> | 파일 구성 및 첨부 안내 | [`Code_Structure_Notice.txt`](Code_Structure_Notice.txt) |
+> | 실습 2 실험 진행 기록 | [`docs/PRACTICE2_IMPLEMENTATION_LOG.md`](docs/PRACTICE2_IMPLEMENTATION_LOG.md) |
+>
+> 주요 런타임 옵션은 `slc_cache_ratio_percent`(SLC cache 비율), `slc_migration_policy`(SLC migration 정책), `gc_policy`(TLC GC 정책)입니다. 재현 절차와 workload 조건은 [`docs/`](docs) 아래 실험 안내 문서를 참고하세요.
+>
 > ## 📄 실습 1 제출물 안내
 >
 > 이 저장소는 [snu-csl/nvmevirt](https://github.com/snu-csl/nvmevirt)를 fork하여 **실습 1: GC victim 선택 정책(Greedy / Random / Cost-Benefit) 구현 및 성능 비교**를 수행한 결과입니다.
@@ -171,5 +189,4 @@ When contributing to this repository, please first discuss the change you wish t
 NVMeVirt is offered under the terms of the GNU General Public License version 2 as published by the Free Software Foundation. More information about this license can be found [here](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html).
 
 Priority queue implementation [`pqueue/`](pqueue/) is offered under the terms of the BSD 2-clause license (GPL-compatible). (Copyright (c) 2014, Volkan Yazıcı <volkan.yazici@gmail.com>. All rights reserved.)
-
 
