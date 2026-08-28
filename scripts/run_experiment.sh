@@ -38,6 +38,10 @@ NVME_CPUS="${NVME_CPUS:-2,3}"
 MOUNT_DIR="${MOUNT_DIR:-$HOME/nvme_mount}"
 TLC_GC_POLICY="${TLC_GC_POLICY:-0}"
 SLC_CACHE_RATIO_PERCENT="${SLC_CACHE_RATIO_PERCENT:-10}"
+EXPERIMENT_SUITE="${EXPERIMENT_SUITE:-}"
+EXPERIMENT_VARIANT="${EXPERIMENT_VARIANT:-}"
+EXPERIMENT_REP="${EXPERIMENT_REP:-}"
+FIO_RANDREPEAT="${FIO_RANDREPEAT:-1}"
 # hotcold 워크로드 전용 (v7, 2026-07-30): 콜드/핫을 물리적으로 분리된 line에
 # 쓰기 위해 cold_fill 이후 cold_touch/hot_churn을 병렬 실행함 (자세한 이유는
 # scripts/workloads/hotcold.fio 상단 주석 참고). v6(size 기반, COLD_TOUCH_SIZE=15G)는
@@ -130,9 +134,10 @@ if [ "$WORKLOAD" = "uniform" ]; then
   # 로컬 VM보다 훨씬 커서(로컬 32KB vs 서버 ~360KB), 로컬 VM 기준으로 잡았던
   # loops=10(총 6GB)로는 용량의 13%밖에 못 채워 GC가 전혀 안 돌았음(2026-07-29 확인).
   # loops=250이면 총 146GB(용량의 약 3.3배)를 써서 GC가 확실히 여러 번 트리거됨.
-  FIO_CMD="fio --name=gc_stress --filename=\$MOUNT_DIR/testfile2 --size=$UNIFORM_SIZE --rw=randwrite --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=$UNIFORM_LOOPS $DIST_OPT $NORANDOMMAP_OPT --group_reporting"
+  FIO_CMD="fio --name=gc_stress --filename=\$MOUNT_DIR/testfile2 --size=$UNIFORM_SIZE --rw=randwrite --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=$UNIFORM_LOOPS --randrepeat=$FIO_RANDREPEAT $DIST_OPT $NORANDOMMAP_OPT --group_reporting"
   fio --name=gc_stress --filename="$MOUNT_DIR/testfile2" --size="$UNIFORM_SIZE" --rw=randwrite \
       --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops="$UNIFORM_LOOPS" \
+      --randrepeat="$FIO_RANDREPEAT" \
       $DIST_OPT $NORANDOMMAP_OPT \
       --group_reporting --output-format=json --output="$OUTDIR/fio.json"
 else
@@ -191,6 +196,9 @@ awk '
 
 {
   echo "timestamp=$TS"
+  echo "experiment_suite=$EXPERIMENT_SUITE"
+  echo "experiment_variant=$EXPERIMENT_VARIANT"
+  echo "experiment_rep=$EXPERIMENT_REP"
   echo "policy=$POLICY"
   echo "policy_name=$POLICY_NAME"
   echo "policy_target=slc_migration"
@@ -200,6 +208,7 @@ awk '
   echo "uniform_loops=$UNIFORM_LOOPS"
   echo "random_dist=${RANDOM_DIST:-uniform}"
   echo "norandommap=${NORANDOMMAP:-0}"
+  echo "fio_randrepeat=$FIO_RANDREPEAT"
   echo "cold_size=$COLD_SIZE"
   echo "cold_touch_size=$COLD_TOUCH_SIZE"
   echo "hot_size=$HOT_SIZE"

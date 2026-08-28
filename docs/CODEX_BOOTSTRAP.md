@@ -57,16 +57,41 @@
 ## 아직 안 된 것
 
 - `SLC_CACHE_RATIO_PERCENT` 기본값은 현재 `10`이다.
-- 서버에서 `SLC-only` / `overflow` 검증을 다시 돌려 `USER_*_PAGES`, `INTERNAL_*_PAGES` 근거를 확보해야 한다.
-- 서버 `zipf_nrm` / `hotcold` 최종 비교표와 보고서 본문 정리가 남아 있다.
+- 서버 `baseline` / `SLC-only` / `overflow` / `zipf_nrm` / `hotcold` 결과와 보고서 전체 초안은 정리됐다.
+- 전체 원고에 대한 사용자 검토와 수정, 스타일 적용 DOCX 및 최종 PDF 생성이 남아 있다.
 - 현재 Codex 서버 세션에서는 `sudo`, `lsblk`, `/proc`, `/sys` 접근이 막혀 있어 모듈 로드와 실험 실행을 직접 수행할 수 없다.
+
+## 보고서 진행 방식
+
+- 원고 파일은 `report/PRACTICE2_REPORT_DRAFT.md`다.
+- 목차는 `실습 목표 -> 구현 내용 -> 실험 방법 -> 실험 결과 -> 분석 -> 결론`으로 확정했다.
+- 결과는 `Baseline -> SLC-only -> Overflow -> Zipf -> Hot-cold` 순서로 하나씩 작성하고, 각 항목의 표/그래프/본문을 사용자에게 컨펌받은 뒤 다음으로 넘어간다.
+- Markdown은 내용 원본이며, 검토본은 스타일 적용 DOCX, 제출본은 PDF로 만든다.
+- Baseline은 throughput/latency 중심 성능 비교 그래프를 유지한다.
+- SLC-only는 media별 host I/O counter와 migration/internal I/O/TLC GC의 0 값을 보여주는 검증 그래프로 수정했다.
+- Overflow counter 그래프와 본문까지 작성했으며, SLC-only 수정본과 함께 사용자 컨펌 전이다.
+- SLC-only/Overflow의 throughput과 latency는 참고 표로만 남긴다.
+- fig2/fig3의 겹치던 SLC/TLC 범례는 제거하고 막대 내부 직접 라벨만 유지한다.
+- Zipf와 Hot-cold 4정책 비교 그래프 및 4.4/4.5 본문까지 작성했다.
+- Hot-cold migration/erase 비용은 시간 기반 실행량 차이를 보정하기 위해 GiB당으로 정규화했다.
+- Hot-cold 그래프 D는 downstream TLC GC valid-page copies/GiB로 변경했고 peak wear는 표에 남겼다. Zipf는 TLC GC=0이므로 D를 `SLC peak wear`로 유지한다.
+- p99 latency는 migration 전용 실행시간이 아니라 fio host write end-to-end latency다.
+- 2026-08-28 현재 1~3장과 5~6장을 포함한 전체 Markdown 초안이 작성됐다.
+- Pandoc HTML/DOCX 변환 검증은 통과했으며, 실제 스타일 적용 DOCX는 사용자 내용 검토 후 생성한다.
+- 현재 보고서 전체가 사용자 검토 대기 상태다.
+- 점수 보강용 추가 실험은 `ratio 0/5/10/20`, `Zipf/Hot-cold 3회 반복`,
+  `Uniform/Zipf/Hot-cold workload 민감도`의 세 축으로 확정했다.
+- `scripts/run_practice2_extended_experiments.sh`가 60-run 매트릭스를 fresh reload 조건으로
+  실행하며, 완료 label skip으로 중단 후 재시작할 수 있다.
+- `report/make_practice2_extended_figures.py`는 60개 조건 완성 여부를 검사하고 raw/aggregate
+  CSV 및 평균±표준편차 그래프 4개를 생성한다.
+- 실행 방법과 매트릭스는 `docs/PRACTICE2_EXTENDED_EXPERIMENTS.md`에 정리했다.
 
 ## 다음 우선순위
 
-1. `./scripts/collect_summary.sh > /tmp/nvmevirt_summary.csv`로 현재 결과를 먼저 CSV로 모은다.
-2. `1-1 baseline`, `1-2 SLC-only`, `1-3 overflow` 결과를 표/그림으로 정리한다.
-3. 서버 `zipf_nrm` 4정책과 `hotcold full guarded` 4정책을 표로 묶는다.
-4. migration/GC counter와 erase 통계를 바탕으로 보고서 본문을 작성한다.
+1. 일반 서버 shell에서 추가 실험 60개를 suite별로 실행한다.
+2. 확장 집계/그래프를 생성하고 ratio 근거·반복 통계·workload 민감도를 보고서에 반영한다.
+3. 전체 원고 검토 후 스타일 적용 DOCX와 최종 PDF를 만든다.
 
 ## 작업 시 주의사항
 

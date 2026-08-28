@@ -14,30 +14,60 @@
 - 새 로컬 검증 스크립트 `scripts/run_local_slc_validation.sh`가 추가됐다. `baseline`, `slc_only`, `overflow`, `all` 모드로 1번 결과물용 실험을 바로 돌리도록 만든 상태다.
 - 로컬 VM 기준 `make`, smoke, CRC verify, `zipf_nrm`, `hotcold_v7_local_fix2`까지 사용자 확인으로 정상 수행됐다.
 - 서버 형제 저장소 `~/nvmevirt`에는 `9eb9f0b` 시점의 `nvmev.ko`만 확인됐고, 현재 HEAD `09f41ac`와는 커널 코드 차이가 있어 재빌드 없이 재사용하면 안 된다.
-- 최종 보고서용 실측값은 서버에서 다시 수집해야 한다. 로컬 VM 결과는 스크립트/계측 검증과 방향 확인용으로만 취급한다.
+- 최종 보고서용 `baseline`, `SLC-only`, `overflow`, `zipf_nrm`, `hotcold full guarded` 서버 실측값은 수집을 마쳤다. 로컬 VM 결과는 스크립트/계측 검증과 방향 확인용으로만 취급한다.
 - 2026-08-27 현재 Codex 서버 세션에서는 `sudo`, `lsblk`, `/proc`, `/sys` 접근이 막혀 있어서, 여기서 직접 `insmod -> mkfs -> mount -> fio` 흐름을 실행할 수는 없다.
 - 2026-08-27 현재 이 세션 PATH 기준으로 `make`, `gcc`, `clang`, `fio`, `tmux`는 보이지 않고 `jq`만 확인된다. 따라서 실제 빌드/실험은 일반 로그인 shell에서 다시 확인해야 한다.
 - 2026-08-27 현재 worktree WIP에는 `conv_ftl.c`, `conv_ftl.h` 기준으로 reclaim 시작 전 TLC capacity precheck, TLC GC 성공 시에만 write credit refill, host write path의 hidden reclaim 제거가 추가됐다.
 - 같은 날 추가 WIP로 SLC migration은 reclaim 후에도 TLC GC 1 line capacity를 남기는 후보만 선택하도록 reserve-style admission control을 넣었다.
 - 이 guarded WIP는 2026-08-27 서버 일반 shell에서 실제로 build/실행 검증됐다.
 - 검증 완료 범위: `overflow` 재검증 성공, `random/greedy/fifo/cost-benefit hotcold full guarded` 성공, `CRC verify policy1` 성공.
+- 2026-08-27 서버 일반 shell에서 `SLC-only` 검증도 완료됐다. 디렉터리 이름은 스크립트 관례상 `local_*`이지만 서버 실측 결과이며, 최신 확인 대상은 `results/local_20260827_192113_slc_only_validation/`이다.
+
+## 보고서 작성 방식
+
+- 보고서 원고는 `report/PRACTICE2_REPORT_DRAFT.md`에서 관리한다.
+- 제출용 문서 구성은 `1. 실습 목표`, `2. 구현 내용`, `3. 실험 방법`, `4. 실험 결과`, `5. 분석`, `6. 결론`이다.
+- 실험 결과는 `Baseline -> SLC-only -> Overflow -> Zipf -> Hot-cold` 순서로 하나씩 작성한다.
+- 각 항목은 표, 그래프, 본문을 사용자에게 먼저 보여주고 컨펌받은 뒤 다음 항목으로 넘어간다.
+- Markdown은 내용 원본으로 사용하고, 사용자 검토본은 스타일을 적용한 DOCX로 생성한다. 최종 제출본은 DOCX 또는 스타일 적용 HTML에서 PDF로 변환한다.
+- DOCX에는 표지, 목차, 장/절 번호, A4 여백, 일관된 표와 그림 캡션, 페이지 번호, 표 제목 행 반복을 적용한다.
+- `4.1 Baseline`은 성능 비교 목적에 맞춰 throughput/latency/write traffic 그래프를 유지한다.
+- `4.2 SLC-only`는 성능 그래프를 제거하고 host I/O media counter와 migration/internal I/O/TLC GC의 0 값을 보여주는 검증 그래프로 수정했다.
+- `4.3 Overflow` 본문과 `report/figures/practice2_fig3_overflow_validation.png`를 추가했다. host read의 TLC 접근과 SLC internal read/TLC internal write counter로 migration 경로를 보여준다.
+- SLC-only와 Overflow의 throughput/latency는 그래프에서 제외하고 보고서 참고 표에만 기록한다.
+- fig2/fig3의 SLC/TLC 범례는 막대의 직접 라벨과 중복되고 그래프에 겹쳐 제거했다.
+- `4.4 Zipf`는 서버 22 GiB x 7회 4정책 결과로 throughput, p99, migrated pages, peak erase 그래프와 본문을 작성했다.
+- `4.5 Hot-cold`는 서버 full guarded 4정책 결과로 같은 형식의 그래프와 본문을 작성했다. 시간 기반 workload이므로 migration/erase 비용은 written GiB로 정규화했다.
+- Hot-cold 그래프의 D 패널은 peak wear 대신 downstream TLC GC migrated pages/GiB로 바꿔 `SLC policy -> SLC copy cost -> TLC GC copy cost -> host performance` 흐름을 보여준다. Peak wear는 보고서 표에 유지한다.
+- Zipf는 TLC GC가 네 정책 모두 0이므로 peak wear를 유지하되 `SLC peak wear`로 명시해 SLC victim 선택의 직접 결과임을 드러냈다.
+- 그래프의 p99 latency는 migration 시작/종료 시간이 아니라 내부 migration/GC 영향을 포함한 fio host write end-to-end latency다.
+- 현재 4.1~4.5 결과 절의 그래프와 본문뿐 아니라 1~3장, 5장 분석, 6장 결론까지 전체 Markdown 초안이 작성됐다.
+- 1~3장은 공식 요구사항과 현재 코드의 SLC/TLC pool, 공통 mapping, oneshot/timing, guarded migration 구현을 대조해 작성했다.
+- 5~6장은 Zipf를 SLC policy의 격리 효과, Hot-cold를 downstream TLC GC까지 포함한 전체 효과로 구분해 종합했다.
+- Pandoc을 이용한 HTML/DOCX 구문 및 그림 포함 변환 검증은 통과했다. 실제 스타일 적용 DOCX는 내용 검토 후 만든다.
+- 현재 보고서 전체가 사용자 검토 대기 상태다.
+- 추가 점수 보강 작업은 세 축으로 확정했다.
+  - Greedy 고정, SLC ratio `0/5/10/20%`, burst 1 GiB와 sustained 22 GiB x 7을 각 3회
+  - ratio 10%, TLC GC Greedy 고정, Zipf와 Hot-cold 네 정책을 현재 binary에서 각 3회
+  - ratio 10%, 22 GiB x 7, `norandommap=1` Uniform 네 정책을 각 3회 추가해 workload 민감도 비교
+- `scripts/run_practice2_extended_experiments.sh`에 위 60-run 매트릭스와 완료 label 기반 resume을 구현했다.
+- `report/make_practice2_extended_figures.py`에 완성도 검사, raw/aggregate CSV, error bar 그래프 4개 생성을 구현했다.
+- 실행 가이드는 `docs/PRACTICE2_EXTENDED_EXPERIMENTS.md`다.
+- 현재 Codex shell에는 `fio`가 없어 실제 run은 아직 시작하지 못했으며, 일반 서버 shell에서 실행해야 한다.
 
 ## 다음에 바로 할 일
 
-1. `./scripts/collect_summary.sh > /tmp/nvmevirt_summary.csv`로 오늘까지의 결과를 CSV로 모은다.
-2. `1-1 baseline`, `1-2 SLC-only`, `1-3 overflow` 결과를 표와 그림으로 정리한다.
-3. 서버 `zipf_nrm` 4정책과 `hotcold full guarded` 4정책을 같은 형식으로 정리한다.
-4. `slc_migrate_pages`, `tlc_gc_cnt`, `erase sum`, `erase max`, `erase_cv_all` 중심으로 비교표를 만든다.
-5. 그 기준으로 보고서 본문을 작성한다.
+1. `docs/PRACTICE2_EXTENDED_EXPERIMENTS.md`의 서버 환경변수를 설정하고 `dry-run`을 확인한다.
+2. `ratio -> policy -> sensitivity` 순서로 60개 추가 실험을 실행한다.
+3. 확장 CSV/그래프를 생성해 보고서의 비율 근거, 반복 통계, workload 타당성 절을 추가한다.
+4. 확정 원고를 스타일 적용 DOCX와 PDF 변환용 결과물로 생성한다.
 
 ## 미구현 핵심 항목
 
-- 결과 표/본문 정리
-- `collect_summary.sh` 기반 최종 CSV 정리
-- 실패 흔적 run 제외 기준 정리
-- 결과 표/본문 정리
-- 필요 시 `TLC_GC_CNT > 0` workload 추가
-- 필요 시 line metadata 저장소 분리
+- 추가 실험 60개 서버 실행 및 결과 해석
+- ratio/반복/workload 민감도 결과의 보고서 반영
+- 전체 보고서 사용자 검토 반영
+- 스타일 적용 DOCX 및 최종 PDF 생성
 
 ## 주의할 점
 

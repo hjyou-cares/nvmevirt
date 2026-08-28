@@ -52,6 +52,7 @@ direct=1
 bs=4k
 iodepth=16
 group_reporting=1
+randrepeat=1
 
 [cold_fill]
 filename=coldfile
