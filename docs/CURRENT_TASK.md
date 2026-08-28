@@ -2,7 +2,8 @@
 
 ## 현재 흐름
 
-- 실습2 WIP HEAD는 commit `09f41ac`로 로컬/원격(`origin/practice2-slc-cache`)에 반영됐다.
+- 현재 HEAD는 `bf666a3`, 원격 `origin/practice2-slc-cache`는 확장 결과 snapshot `eeee1c9`다.
+- Crossover 준비 변경은 아직 worktree WIP이며 서버 실행 전에 현재 소스로 재빌드해야 한다.
 - 핵심 변경 파일은 `conv_ftl.c`, `conv_ftl.h`, `ssd.c`, `ssd.h`, `ssd_config.h`, `main.c`다.
 - 현재 코드는 SLC/TLC pool metadata, pool-aware write path, SLC migration 4정책, migration/TLC GC counter 분리, SLC/TLC oneshot/timing 분기, `slc_wp/tlc_wp/tlc_gc_wp` direct path, `slc_lm/tlc_lm` direct manager path까지 들어간 상태다.
 - 현재 worktree 기준 `SLC_CACHE_RATIO_PERCENT`는 `10`이라 SLC path가 컴파일 시 기본 활성이다.
@@ -22,6 +23,10 @@
 - 이 guarded WIP는 2026-08-27 서버 일반 shell에서 실제로 build/실행 검증됐다.
 - 검증 완료 범위: `overflow` 재검증 성공, `random/greedy/fifo/cost-benefit hotcold full guarded` 성공, `CRC verify policy1` 성공.
 - 2026-08-27 서버 일반 shell에서 `SLC-only` 검증도 완료됐다. 디렉터리 이름은 스크립트 관례상 `local_*`이지만 서버 실측 결과이며, 최신 확인 대상은 `results/local_20260827_192113_slc_only_validation/`이다.
+- 2026-08-28 확장 실험은 ratio 24개, Zipf/Hot-cold policy repeat 24개,
+  Uniform sensitivity 12개로 총 `60/60` 완료됐다. 동일 집계 로직 검사에서 누락과 fio 오류는 0이었다.
+- 새 worktree WIP는 `write_early_completion`을 insmod parameter로 노출하고,
+  resident/overflow/sustained 구간을 ratio 0/10으로 비교하는 18-run crossover suite를 추가한다.
 
 ## 보고서 작성 방식
 
@@ -53,36 +58,36 @@
 - `scripts/run_practice2_extended_experiments.sh`에 위 60-run 매트릭스와 완료 label 기반 resume을 구현했다.
 - `report/make_practice2_extended_figures.py`에 완성도 검사, raw/aggregate CSV, error bar 그래프 4개 생성을 구현했다.
 - 실행 가이드는 `docs/PRACTICE2_EXTENDED_EXPERIMENTS.md`다.
-- 현재 Codex shell에는 `fio`가 없어 실제 run은 아직 시작하지 못했으며, 일반 서버 shell에서 실행해야 한다.
-- 추가 실험 실행 준비 변경은 commit `f32ded2` (`Expand Practice 2 report and experiment workflow`)에 저장돼 있다.
-- `git push`는 GitHub HTTPS 인증 정보가 없어 실패했다. 따라서 원격에는 아직 이 commit이 반영되지 않았을 수 있다.
-- 서버에서 현재 checkout이 `f32ded2`를 포함하고 있다면 push 없이 바로 실험을 실행할 수 있다.
-- 추가 실험은 `tmux`에서 `./scripts/run_practice2_extended_experiments.sh all`로 실행하며, 완료된 label은 자동 skip되어 중단 후 재개된다.
+- 확장 60-run raw 결과는 완료됐고, 전용 CSV/그래프와 보고서 반영은 아직 남아 있다.
 - 실험 매트릭스는 ratio 24회, Zipf/Hot-cold policy repeat 24회, Uniform sensitivity 12회로 총 60회다.
 - 실험 완료 후 `python3 report/make_practice2_extended_figures.py`를 실행해 결과 CSV와 error-bar 그래프를 생성한다.
 
 ## 다음에 바로 할 일
 
-1. `docs/PRACTICE2_EXTENDED_EXPERIMENTS.md`의 서버 환경변수를 설정하고 `dry-run`을 확인한다.
-2. `ratio -> policy -> sensitivity` 순서로 60개 추가 실험을 실행한다.
-3. 확장 CSV/그래프를 생성해 보고서의 비율 근거, 반복 통계, workload 타당성 절을 추가한다.
-4. 확정 원고를 스타일 적용 DOCX와 PDF 변환용 결과물로 생성한다.
+1. 일반 서버에서 현재 소스를 `make`로 다시 빌드한다.
+2. `./scripts/run_slc_crossover_experiments.sh dry-run`의 18개 조건을 확인한 뒤 `all`을 실행한다.
+3. 기존 확장 결과와 crossover 결과의 CSV/그래프를 생성한다.
+4. SLC resident 이득, saturation 이후 역전, 반복 통계와 workload 민감도를 보고서에 반영한다.
+5. 확정 원고를 스타일 적용 DOCX와 PDF 변환용 결과물로 생성한다.
 
 ## 새 세션 인계 메모
 
-- 현재 목표는 보고서 점수 보강용 추가 실험 60회를 완료하는 것이다.
-- 사용자가 서버 shell에서 실험을 시작했거나 시작할 예정이다. 이 세션에서는 실제 fio 실행을 하지 않는다.
+- 확장 60-run은 완료됐다. 현재 목표는 SLC cache의 유리/불리 구간을 직접 보여주는 crossover 18-run이다.
+- 실행 가이드는 `docs/PRACTICE2_SLC_CROSSOVER_EXPERIMENT.md`다.
 - 서버에서 실행할 명령:
   - `export NVME_DEV=/dev/nvme1n1 MEMMAP_START=16G MEMMAP_SIZE=48G NVME_CPUS=7,8`
-  - `tmux new -A -s p2-extra`
-  - `./scripts/run_practice2_extended_experiments.sh all`
+  - `make -j"$(nproc)"`
+  - `tmux new -A -s p2-crossover`
+  - `./scripts/run_slc_crossover_experiments.sh all`
 - 다음 세션 시작 시 먼저 `git status --short`, `git log -1 --oneline`, `docs/CURRENT_TASK.md`를 확인한다.
-- 실험 결과가 있으면 `python3 report/make_practice2_extended_figures.py`로 60개 완성 여부를 확인한 뒤, `report/PRACTICE2_REPORT_DRAFT.md`의 ratio 근거·반복 통계·workload sensitivity 부분을 갱신한다.
+- crossover 완료 후 `python3 report/make_slc_crossover_figure.py`로 18개 완성 여부와 counter를 검증한다.
+- 기존 확장 결과는 `python3 report/make_practice2_extended_figures.py`로 집계한다.
 - 현재 작업본에서 추가 수정이 필요하면 실험이 끝난 뒤 진행한다. 실험 중에는 `conv_ftl.c`, workload 설정, 실행 스크립트를 바꾸지 않아 결과 조건을 고정한다.
 
 ## 미구현 핵심 항목
 
-- 추가 실험 60개 서버 실행 및 결과 해석
+- SLC crossover 18개 서버 실행 및 결과 해석
+- 기존 확장 60-run CSV/그래프 생성
 - ratio/반복/workload 민감도 결과의 보고서 반영
 - 전체 보고서 사용자 검토 반영
 - 스타일 적용 DOCX 및 최종 PDF 생성
@@ -90,7 +95,7 @@
 ## 주의할 점
 
 - 현재 기본 `SLC_CACHE_RATIO_PERCENT`는 `10`이다.
-- 2026-08-27 현재 Codex 서버 세션에서는 `make`가 안 잡히고 `sudo`, `lsblk`, `/proc`, `/sys` 접근도 막혀 있어 새 코드를 직접 빌드/실행하지는 못했다. 다음 실행은 일반 로그인 shell에서 해야 한다.
+- 현재 Codex 셸은 WSL2 kernel header가 없어 module build가 실패하며, `sudo`/장치 접근도 제한된다. 실제 빌드와 실험은 일반 서버 로그인 shell에서 해야 한다.
 - `echo reset > /proc/nvmev/debug`는 counter만 초기화하고 FTL state는 초기화하지 않는다.
 - 정책 비교는 반드시 `umount -> rmmod -> insmod -> mkfs -> mount`의 fresh reload 조건으로 수행한다.
 - 로컬 VM은 용량이 작아 `No space left on device` 같은 파일시스템 노이즈가 섞이기 쉽다. 최종 실측과 결과 표는 서버 결과만 기준으로 쓴다.

@@ -15,6 +15,9 @@
 #   TLC_GC_POLICY 기본값 0. 실습2에서는 TLC GC와 SLC migration 의미가 분리됐으므로
 #                 이 스크립트는 TLC GC를 고정하고 slc_migration_policy만 비교한다.
 #   SLC_CACHE_RATIO_PERCENT 기본값 10. 0이면 TLC-only baseline, 10이면 현재 기본 SLC cache.
+#   WRITE_EARLY_COMPLETION 비우면 빌드 기본값을 사용. 0이면 fio가 NAND 완료까지 기다려
+#                 SLC/TLC program latency 차이를 직접 비교할 수 있다.
+#   FIO_IODEPTH   uniform workload queue depth. 기본값 16.
 #
 # 예) 서버에서: NVME_DEV=/dev/nvme1n1 MEMMAP_START=16G MEMMAP_SIZE=48G NVME_CPUS=7,8 \
 #              ./scripts/run_experiment.sh 3 randwrite6g uniform
@@ -38,6 +41,8 @@ NVME_CPUS="${NVME_CPUS:-2,3}"
 MOUNT_DIR="${MOUNT_DIR:-$HOME/nvme_mount}"
 TLC_GC_POLICY="${TLC_GC_POLICY:-0}"
 SLC_CACHE_RATIO_PERCENT="${SLC_CACHE_RATIO_PERCENT:-10}"
+WRITE_EARLY_COMPLETION="${WRITE_EARLY_COMPLETION:-}"
+FIO_IODEPTH="${FIO_IODEPTH:-16}"
 EXPERIMENT_SUITE="${EXPERIMENT_SUITE:-}"
 EXPERIMENT_VARIANT="${EXPERIMENT_VARIANT:-}"
 EXPERIMENT_REP="${EXPERIMENT_REP:-}"
@@ -91,6 +96,16 @@ NORANDOMMAP="${NORANDOMMAP:-}"
 NORANDOMMAP_OPT=""
 [ -n "$NORANDOMMAP" ] && NORANDOMMAP_OPT="--norandommap=1"
 
+case "$WRITE_EARLY_COMPLETION" in
+  ""|0|1) ;;
+  *) echo "WRITE_EARLY_COMPLETION은 비우거나 0/1이어야 함" >&2; exit 1 ;;
+esac
+
+[[ "$FIO_IODEPTH" =~ ^[1-9][0-9]*$ ]] || {
+  echo "FIO_IODEPTH는 1 이상의 정수여야 함" >&2
+  exit 1
+}
+
 case "$POLICY" in
   0) POLICY_NAME=greedy ;;
   1) POLICY_NAME=random ;;
@@ -114,9 +129,13 @@ mkdir -p "$MOUNT_DIR"
 # fresh하게 만든 뒤, 그 위에 새 파일시스템까지 새로 만듦 (2026-07-27/29 결정)
 sudo umount "$MOUNT_DIR" 2>/dev/null || true
 sudo rmmod nvmev 2>/dev/null || true
+EARLY_COMPLETION_ARGS=()
+if [ -n "$WRITE_EARLY_COMPLETION" ]; then
+  EARLY_COMPLETION_ARGS+=("write_early_completion=$WRITE_EARLY_COMPLETION")
+fi
 sudo insmod "$REPO_ROOT/nvmev.ko" memmap_start="$MEMMAP_START" memmap_size="$MEMMAP_SIZE" \
     cpus="$NVME_CPUS" gc_policy="$TLC_GC_POLICY" slc_migration_policy="$POLICY" \
-    slc_cache_ratio_percent="$SLC_CACHE_RATIO_PERCENT"
+    slc_cache_ratio_percent="$SLC_CACHE_RATIO_PERCENT" "${EARLY_COMPLETION_ARGS[@]}"
 
 if command -v udevadm >/dev/null 2>&1; then
   sudo udevadm settle
@@ -134,9 +153,9 @@ if [ "$WORKLOAD" = "uniform" ]; then
   # 로컬 VM보다 훨씬 커서(로컬 32KB vs 서버 ~360KB), 로컬 VM 기준으로 잡았던
   # loops=10(총 6GB)로는 용량의 13%밖에 못 채워 GC가 전혀 안 돌았음(2026-07-29 확인).
   # loops=250이면 총 146GB(용량의 약 3.3배)를 써서 GC가 확실히 여러 번 트리거됨.
-  FIO_CMD="fio --name=gc_stress --filename=\$MOUNT_DIR/testfile2 --size=$UNIFORM_SIZE --rw=randwrite --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops=$UNIFORM_LOOPS --randrepeat=$FIO_RANDREPEAT $DIST_OPT $NORANDOMMAP_OPT --group_reporting"
+  FIO_CMD="fio --name=gc_stress --filename=\$MOUNT_DIR/testfile2 --size=$UNIFORM_SIZE --rw=randwrite --bs=4k --numjobs=1 --iodepth=$FIO_IODEPTH --ioengine=libaio --direct=1 --loops=$UNIFORM_LOOPS --randrepeat=$FIO_RANDREPEAT $DIST_OPT $NORANDOMMAP_OPT --group_reporting"
   fio --name=gc_stress --filename="$MOUNT_DIR/testfile2" --size="$UNIFORM_SIZE" --rw=randwrite \
-      --bs=4k --numjobs=1 --iodepth=16 --ioengine=libaio --direct=1 --loops="$UNIFORM_LOOPS" \
+      --bs=4k --numjobs=1 --iodepth="$FIO_IODEPTH" --ioengine=libaio --direct=1 --loops="$UNIFORM_LOOPS" \
       --randrepeat="$FIO_RANDREPEAT" \
       $DIST_OPT $NORANDOMMAP_OPT \
       --group_reporting --output-format=json --output="$OUTDIR/fio.json"
@@ -221,6 +240,8 @@ awk '
   echo "tlc_gc_policy=$TLC_GC_POLICY"
   echo "slc_migration_policy=$POLICY"
   echo "slc_cache_ratio_percent=$SLC_CACHE_RATIO_PERCENT"
+  echo "write_early_completion=${WRITE_EARLY_COMPLETION:-build_default}"
+  echo "fio_iodepth=$FIO_IODEPTH"
   echo "fio_cmd=$FIO_CMD"
 } > "$OUTDIR/meta.txt"
 

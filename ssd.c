@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/ktime.h>
+#include <linux/moduleparam.h>
 #include <linux/sched/clock.h>
 
 #include "nvmev.h"
 #include "ssd.h"
+
+static bool write_early_completion = WRITE_EARLY_COMPLETION;
+module_param(write_early_completion, bool, 0444);
+MODULE_PARM_DESC(write_early_completion,
+		 "Complete host writes at the controller write buffer instead of NAND completion");
 
 static inline uint64_t __get_ioclock(struct ssd *ssd)
 {
@@ -137,7 +143,7 @@ void ssd_init_params(struct ssdparams *spp, uint64_t capacity, uint32_t nparts)
 	spp->pcie_bandwidth = PCIE_BANDWIDTH;
 
 	spp->write_buffer_size = GLOBAL_WB_SIZE;
-	spp->write_early_completion = WRITE_EARLY_COMPLETION;
+	spp->write_early_completion = write_early_completion;
 
 	/* calculated values */
 	spp->secs_per_blk = spp->secs_per_pg * spp->pgs_per_blk;

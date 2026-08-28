@@ -53,12 +53,16 @@
 - 2026-08-27 현재 worktree WIP에는 reclaim 시작 전 TLC GC capacity precheck, TLC GC 성공 시에만 write credit refill, host write path의 hidden reclaim 제거가 들어갔다.
 - 같은 날 추가 WIP로 SLC migration이 reclaim 후에도 TLC GC 1 line capacity를 남기도록 reserve-style admission control이 들어갔다.
 - 2026-08-27 서버 일반 shell에서 guarded/reserve WIP 기준 `random hotcold full`, `greedy/fifo/cost-benefit hotcold full`, `overflow` 재검증, `CRC verify policy1`까지 성공했다.
+- 2026-08-28 확장 실험 60개는 `60/60`, fio 오류 0, 조건 누락 0으로 완료됐다.
+- 같은 날 SLC가 유리한 resident 구간과 migration으로 불리해지는 구간을 함께 측정하는
+  18-run crossover 실험 스크립트와 전용 집계기를 추가했다.
 
 ## 아직 안 된 것
 
 - `SLC_CACHE_RATIO_PERCENT` 기본값은 현재 `10`이다.
 - 서버 `baseline` / `SLC-only` / `overflow` / `zipf_nrm` / `hotcold` 결과와 보고서 전체 초안은 정리됐다.
 - 전체 원고에 대한 사용자 검토와 수정, 스타일 적용 DOCX 및 최종 PDF 생성이 남아 있다.
+- Crossover용 새 module parameter가 들어갔으므로 서버에서 재빌드 후 18-run 실험이 필요하다.
 - 현재 Codex 서버 세션에서는 `sudo`, `lsblk`, `/proc`, `/sys` 접근이 막혀 있어 모듈 로드와 실험 실행을 직접 수행할 수 없다.
 
 ## 보고서 진행 방식
@@ -86,14 +90,15 @@
 - `report/make_practice2_extended_figures.py`는 60개 조건 완성 여부를 검사하고 raw/aggregate
   CSV 및 평균±표준편차 그래프 4개를 생성한다.
 - 실행 방법과 매트릭스는 `docs/PRACTICE2_EXTENDED_EXPERIMENTS.md`에 정리했다.
-- 추가 실험 실행 준비 변경은 commit `f32ded2` (`Expand Practice 2 report and experiment workflow`)에 저장돼 있다.
-- GitHub HTTPS 인증 문제로 push는 아직 실패했을 수 있으므로, 다음 세션에서 원격 반영 여부를 확인한다.
-- 실험 중에는 source/workload 파일을 수정하지 않고, 결과 생성 후에만 보고서와 그래프를 갱신한다.
+- 확장 실험 raw 결과 snapshot은 원격 commit `eeee1c9`까지 반영돼 있다.
+- Crossover 실행 중에는 source/workload 파일을 수정하지 않고 결과 조건을 고정한다.
+- 확장 실험 60개 raw 결과는 완료됐지만, CSV/그래프 생성과 보고서 반영은 아직 남아 있다.
+- Crossover 실행법은 `docs/PRACTICE2_SLC_CROSSOVER_EXPERIMENT.md`에 정리했다.
 
 ## 다음 우선순위
 
-1. 일반 서버 shell에서 추가 실험 60개를 suite별로 실행한다.
-2. 확장 집계/그래프를 생성하고 ratio 근거·반복 통계·workload 민감도를 보고서에 반영한다.
+1. 일반 서버 shell에서 재빌드 후 SLC crossover 18개 실험을 실행한다.
+2. 기존 60-run과 crossover 집계/그래프를 생성해 보고서에 반영한다.
 3. 전체 원고 검토 후 스타일 적용 DOCX와 최종 PDF를 만든다.
 
 ## 작업 시 주의사항

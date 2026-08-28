@@ -682,3 +682,36 @@
 
 - 오늘 성공한 `CRC verify`는 `policy 1` 한 세트만 추가 확인했다.
 - 최종 보고서용으로는 `baseline/SLC-on`, 서버 `zipf_nrm`, 서버 `hotcold full guarded`를 같은 CSV 형식으로 묶어 비교표를 정리해야 한다.
+
+## 2026-08-28: SLC resident-to-sustained crossover 실험 준비
+
+### 변경한 내용
+
+- `ssd.c`
+  - 기존 compile-time `WRITE_EARLY_COMPLETION` 값을 기본값으로 유지하면서,
+    `write_early_completion=0/1` insmod parameter로 같은 binary에서 선택할 수 있게 했다.
+- `scripts/run_experiment.sh`
+  - 선택적 `WRITE_EARLY_COMPLETION`과 `FIO_IODEPTH` 환경변수를 추가하고 meta에 기록한다.
+- `scripts/run_slc_crossover_experiments.sh`
+  - resident `1G x 1`, overflow `6G x 1`, sustained `22G x 3`을 ratio 0/10,
+    각 3회 fresh reload로 실행하는 18-run suite를 추가했다.
+- `report/make_slc_crossover_figure.py`
+  - 18개 조건 완성도, fio 오류, completion/iodepth, migration counter를 검사하고
+    raw/aggregate CSV와 평균±표준편차 그림을 생성한다.
+- 실행 가이드
+  - `docs/PRACTICE2_SLC_CROSSOVER_EXPERIMENT.md`
+
+### 변경 이유
+
+- 기존 `WRITE_EARLY_COMPLETION=1`에서는 짧은 write의 host completion이 controller buffer에
+  가려져 SLC/TLC NAND program latency 차이가 fio에 충분히 드러나지 않았다.
+- 같은 completion 조건에서 SLC 내부 resident 구간과 saturation 이후 migration 구간을 함께
+  비교해야 "SLC는 항상 빠르다"가 아니라 workload 크기에 따른 crossover를 보여줄 수 있다.
+
+### 검증 상태
+
+- Bash 구문 검사 통과.
+- Dry-run은 기본 매트릭스 18개를 정확히 출력했다.
+- Python 집계기 `--help` import/구문 확인 통과.
+- 결과가 없는 현재 상태에서 strict 집계기가 누락 18개와 종료 코드 2를 반환하는 것을 확인했다.
+- 현재 Codex 셸은 WSL2 커널 header 경로가 없어 모듈 빌드는 수행하지 못했다. 서버에서 재빌드가 필요하다.
