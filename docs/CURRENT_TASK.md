@@ -1,5 +1,18 @@
 # Current Task
 
+## 2026-08-28 최신 상태
+
+- 현재 HEAD는 `1898ac6`이며 crossover 6개(rep1)가 저장돼 있다.
+- 확장 60-run과 crossover 6-run 모두 fio 오류와 조건 누락 없이 집계 검증을 통과했다.
+- `report/make_practice2_extended_figures.py`로 확장 실험 raw/aggregate CSV와 그림 4개를 생성했다.
+- `report/make_slc_crossover_figure.py --reps 1`은 tail 지표를 p99.9로 집계하고 crossover 그림을 생성한다.
+- `report/REPORT.md`에는 ratio 0/5/10/20 민감도, Zipf/Hot-cold/Uniform 3회 반복, resident/overflow/sustained crossover 결과를 반영했다. 이 파일은 현재 브랜치에서 GitHub가 그림과 함께 바로 렌더링하는 원본이다.
+- `report/build_practice2_docx.py`로 제출 형식의 `report/PRACTICE2_REPORT.docx`를 생성했다. A4 여백, 표지/목차 분리, 장별 새 페이지, 그림 폭 맞춤, 표 머리행 반복, 페이지 번호와 필드 자동 갱신을 적용했다.
+- 사용자 가독성 요청에 따라 원고의 반복 설명은 압축했고, 이후 4장 결과 검토를 위해 Baseline/SLC-only/Overflow 그래프를 복원했다. 현재 `report/REPORT.md`는 2,323단어와 최종 그래프 8개를 사용한다.
+- 제출 안내용 `Code_Structure_Notice.txt`에 Word와 핵심 코드 7개의 첨부 목록 및 파일별 역할을 정리했다.
+- 핵심 crossover 결과는 resident에서 SLC throughput +23.5%, p99.9 -44.3%; overflow에서 throughput +16.9%지만 p99.9 +76.2%; sustained에서 throughput +0.6%, p99.9 13.6배, erase 3.43배다.
+- 다음 단계는 생성물과 보고서 최종 검토 후 DOCX/PDF 변환이다.
+
 ## 현재 흐름
 
 - 현재 HEAD는 `bf666a3`, 원격 `origin/practice2-slc-cache`는 확장 결과 snapshot `eeee1c9`다.
@@ -30,7 +43,7 @@
 
 ## 보고서 작성 방식
 
-- 보고서 원고는 `report/PRACTICE2_REPORT_DRAFT.md`에서 관리한다.
+- 보고서 원고는 `report/REPORT.md`에서 관리한다.
 - 제출용 문서 구성은 `1. 실습 목표`, `2. 구현 내용`, `3. 실험 방법`, `4. 실험 결과`, `5. 분석`, `6. 결론`이다.
 - 실험 결과는 `Baseline -> SLC-only -> Overflow -> Zipf -> Hot-cold` 순서로 하나씩 작성한다.
 - 각 항목은 표, 그래프, 본문을 사용자에게 먼저 보여주고 컨펌받은 뒤 다음 항목으로 넘어간다.
@@ -64,11 +77,8 @@
 
 ## 다음에 바로 할 일
 
-1. 일반 서버에서 현재 소스를 `make`로 다시 빌드한다.
-2. `./scripts/run_slc_crossover_experiments.sh dry-run`의 18개 조건을 확인한 뒤 `all`을 실행한다.
-3. 기존 확장 결과와 crossover 결과의 CSV/그래프를 생성한다.
-4. SLC resident 이득, saturation 이후 역전, 반복 통계와 workload 민감도를 보고서에 반영한다.
-5. 확정 원고를 스타일 적용 DOCX와 PDF 변환용 결과물로 생성한다.
+1. Workload 설명과 8개 결과 그래프를 반영한 Markdown/Word의 사용자 육안 검토를 반영한다.
+2. 확정 원고를 최종 PDF로 변환한다.
 
 ## 새 세션 인계 메모
 
@@ -86,9 +96,6 @@
 
 ## 미구현 핵심 항목
 
-- SLC crossover 18개 서버 실행 및 결과 해석
-- 기존 확장 60-run CSV/그래프 생성
-- ratio/반복/workload 민감도 결과의 보고서 반영
 - 전체 보고서 사용자 검토 반영
 - 스타일 적용 DOCX 및 최종 PDF 생성
 

@@ -1,0 +1,233 @@
+실습 2: NVMeVirt SLC Cache 및 Migration 정책 — 구현/추가한 파일 목록
+=====================================================================
+
+제출자 : 유형진 (인턴)
+GitHub : https://github.com/hjyou-cares/nvmevirt.git
+Branch : practice2-slc-cache
+보고서 : report/REPORT.md
+Word   : report/PRACTICE2_REPORT.docx
+
+
+1. 메일 첨부 권장 파일
+----------------------
+
+[필수]
+  1) report/PRACTICE2_REPORT.docx     제출용 보고서
+  2) Code_Structure_Notice.txt        구현 파일 안내
+  3) conv_ftl.c
+  4) conv_ftl.h
+  5) ssd.c
+  6) ssd.h
+  7) ssd_config.h
+  8) main.c
+  9) io.c
+
+[선택: 실험 재현 자료까지 전달할 때]
+  - scripts/run_experiment.sh
+  - scripts/run_local_slc_validation.sh
+  - scripts/run_practice2_extended_experiments.sh
+  - scripts/run_slc_crossover_experiments.sh
+  - scripts/collect_summary.sh
+  - scripts/workloads/hotcold.fio
+  - report/REPORT.md
+  - report/extended_results/*.csv
+  - report/crossover_results/*.csv
+
+results/ 아래 raw 결과에는 큰 erase_cnt.txt가 다수 포함되어 있으므로 메일에 직접
+첨부하기보다는 GitHub branch 또는 aggregate CSV를 공유하는 것을 권장한다.
+
+
+2. 코드 구조
+------------
+
+nvmevirt/
+│
+├─ [핵심 수정] conv_ftl.c
+│    Practice 1 기준선 대비 +820 / -153줄
+│
+│    ├─ 모듈 파라미터
+│    │    ├─ slc_cache_ratio_percent
+│    │    │      0이면 기존 TLC-only, 0보다 크면 전체 line의 일부를 SLC로 분할
+│    │    └─ slc_migration_policy
+│    │           0=Greedy, 1=Random, 2=FIFO, 3=Cost-Benefit (0444)
+│    │
+│    ├─ SLC/TLC pool 구조
+│    │    ├─ init_slc_layout_metadata()     전체 line을 SLC/TLC pool로 고정 분할
+│    │    ├─ slc_lm / tlc_lm               pool별 free/full/victim line 관리
+│    │    ├─ slc_wp                        host SLC write pointer
+│    │    ├─ tlc_wp                        TLC-only host write pointer
+│    │    └─ tlc_gc_wp                     SLC migration/TLC GC internal write pointer
+│    │
+│    ├─ Media-aware I/O
+│    │    ├─ ppa_is_slc()                  PPA가 속한 media 판별
+│    │    ├─ get_ppa_nand_media()          NAND command에 SLC/TLC media 지정
+│    │    ├─ get_pool_pgs_per_oneshotpg()  pool별 program unit 선택
+│    │    ├─ conv_write()                  SLC 우선 host write 및 mapping 갱신
+│    │    └─ conv_read()                   mapping PPA의 media에 맞춰 read 수행
+│    │
+│    ├─ SLC-to-TLC migration
+│    │    ├─ should_migrate_slc()          SLC free line 고갈 여부 판정
+│    │    ├─ select_slc_migration_victim_line()
+│    │    │      Greedy / Random / FIFO / Cost-Benefit victim 선택
+│    │    ├─ migration_preserves_gc_capacity()
+│    │    │      migration 후에도 TLC GC 한 line의 여유를 보존
+│    │    ├─ do_slc_migration()            victim 선택 및 필요 시 선행 TLC GC
+│    │    └─ foreground_slc_migration()    host write 경로의 SLC 공간 회수
+│    │
+│    ├─ Migration 정책
+│    │    ├─ Greedy                        최소 valid page 수(vpc)
+│    │    ├─ Random                        적합 후보 중 균등 무작위
+│    │    ├─ FIFO                          가장 작은 close_seq
+│    │    └─ Cost-Benefit                  (ipc × age) / (2 × vpc)
+│    │           age = cb_clock - mtime, 동적 age를 반영하기 위해 후보 전체 재평가
+│    │
+│    ├─ Reclaim 통합 및 안전성
+│    │    ├─ reclaim_fits_gc_capacity()    TLC destination 수용 가능성 사전 검사
+│    │    ├─ reclaim_one_line()            valid page copy/mapping/erase 공통 경로
+│    │    ├─ RECLAIM_REASON_TLC_GC         TLC-to-TLC GC 통계
+│    │    └─ RECLAIM_REASON_SLC_MIGRATION  SLC-to-TLC migration 통계
+│    │
+│    └─ 계측 counter
+│         ├─ SLC_MIGRATION_CNT / VALID_PAGE_MIGRATE_CNT
+│         ├─ TLC_GC_CNT / VALID_PAGE_MIGRATE_CNT
+│         └─ USER/INTERNAL READ/WRITE SLC/TLC page counter
+│
+├─ [핵심 수정] conv_ftl.h
+│    Practice 1 기준선 대비 +42 / -7줄
+│
+│    ├─ enum line_pool_id                  SLC/TLC/shared pool 구분
+│    ├─ struct line
+│    │    ├─ pool                          line 소유 pool
+│    │    ├─ mtime                         Cost-Benefit logical timestamp
+│    │    └─ close_seq                     FIFO close order
+│    ├─ struct slc_cache_layout            ratio/boundary/line 수
+│    ├─ struct slc_cache_runtime           slc_lm/tlc_lm 및 3개 write pointer
+│    └─ media별 I/O 및 migration/GC counter extern 선언
+│
+├─ [핵심 수정] ssd_config.h
+│    Practice 1 기준선 대비 +21줄
+│
+│    ├─ SLC_CACHE_RATIO_PERCENT            기본 SLC ratio 10%
+│    ├─ TLC_ONESHOT_PAGE_SIZE              TLC program unit 32 KiB
+│    ├─ SLC_ONESHOT_PAGE_SIZE              SLC program unit 16 KiB
+│    ├─ SLC_NAND_*_READ_LATENCY            SLC read timing
+│    └─ SLC_NAND_PROG_LATENCY              TLC program latency의 1/3
+│
+├─ [핵심 수정] ssd.h
+│    Practice 1 기준선 대비 +11줄
+│
+│    ├─ NAND_MEDIA_SLC / NAND_MEDIA_TLC    NAND command media 구분
+│    ├─ struct nand_cmd.media              command별 media 전달
+│    └─ struct ssdparams                   SLC oneshot/read/program timing 필드
+│
+├─ [핵심 수정] ssd.c
+│    Practice 1 기준선 대비 +45 / -13줄
+│
+│    ├─ write_early_completion             runtime module parameter (0444)
+│    ├─ ssd_init_params()                  SLC/TLC program unit과 timing 초기화
+│    ├─ get_nand_read_latency()            media별 read latency 선택
+│    ├─ get_nand_write_latency()           media별 program latency 선택
+│    └─ ssd_advance_nand()                 nand_cmd.media를 timing model에 반영
+│
+├─ [계측 수정] main.c
+│    Practice 1 기준선 대비 +26줄
+│
+│    ├─ /proc/nvmev/debug 읽기
+│    │      SLC migration, TLC GC, media별 host/internal I/O counter 출력
+│    └─ /proc/nvmev/debug에 "reset" 쓰기
+│           위 counter와 erase count 초기화
+│
+├─ [안정성 수정] io.c
+│    Practice 1 기준선 대비 +25 / -8줄
+│
+│    └─ __allocate_work_queue_entry()
+│           I/O worker queue 포화 시 즉시 실패하지 않고 완료 요청을 reclaim한 뒤
+│           재시도하도록 변경. 장시간 sustained 실험의 queue saturation을 방지
+│
+├─ [실험 스크립트] scripts/
+│    ├─ run_experiment.sh
+│    │      policy/ratio/early-completion/iodepth를 지정해 fresh reload 후 fio 실행
+│    ├─ run_local_slc_policy_compare.sh
+│    │      4개 migration 정책 smoke/compare/CRC verify
+│    ├─ run_local_slc_validation.sh
+│    │      TLC-only baseline, SLC-only, overflow 기능 검증
+│    ├─ run_practice2_extended_experiments.sh
+│    │      ratio/Zipf/Hot-cold/Uniform 60-run 실험과 resume
+│    ├─ run_slc_crossover_experiments.sh
+│    │      resident/overflow/sustained × ratio 0/10 crossover
+│    ├─ collect_summary.sh
+│    │      fio/meta/debug/erase 결과를 CSV로 통합
+│    └─ workloads/hotcold.fio
+│           cold 영역과 hot churn을 동시에 수행하는 locality workload
+│
+├─ [보고서/분석] report/
+│    ├─ REPORT.md
+│    │      GitHub 렌더링용 보고서 원본
+│    ├─ PRACTICE2_REPORT.docx
+│    │      제출용 Word 보고서
+│    ├─ build_practice2_docx.py
+│    │      Markdown을 A4/목차/페이지 번호/표 머리행 형식의 Word로 변환
+│    ├─ make_practice2_extended_figures.py
+│    │      60-run 검증, raw/aggregate CSV 및 반복 통계 그림 생성
+│    ├─ make_slc_crossover_figure.py
+│    │      crossover 검증, p99.9 집계 및 그림 생성
+│    ├─ extended_results/
+│    │    ├─ practice2_extended_raw.csv
+│    │    └─ practice2_extended_aggregate.csv
+│    ├─ crossover_results/
+│    │    ├─ slc_crossover_raw.csv
+│    │    └─ slc_crossover_aggregate.csv
+│    └─ figures/
+│         ├─ practice2_fig1_baseline_ratio_compare.png
+│         ├─ practice2_fig2_slc_only_validation.png
+│         ├─ practice2_fig3_overflow_validation.png
+│         ├─ practice2_ext_fig1_ratio_sensitivity.png
+│         ├─ practice2_ext_fig2_zipf_repeat.png
+│         ├─ practice2_ext_fig3_hotcold_repeat.png
+│         ├─ practice2_ext_fig4_workload_sensitivity.png
+│         └─ practice2_ext_fig5_slc_crossover.png
+│
+└─ [실측 데이터] results/
+     ├─ 기능 검증
+     │    SLC-only, overflow, CRC32C verify
+     ├─ 확장 실험
+     │    ratio 24 + Zipf/Hot-cold 24 + Uniform 12 = 60 runs
+     └─ crossover
+          resident/overflow/sustained × ratio 0/10 = 6 runs
+
+
+3. 핵심 검증 결과
+-----------------
+
+- SLC-only: host read/write가 SLC에서만 발생, migration/TLC GC 0.
+- Overflow: SLC internal read 566,781 pages와 TLC internal write 566,781 pages 일치.
+- CRC32C: 네 migration 정책 모두 data mismatch 없이 통과.
+- Extended suite: 60/60 완료, fio error 및 조건 누락 0.
+- Crossover: 6/6 완료.
+  - Resident: SLC throughput +23.5%, p99.9 -44.3%.
+  - Overflow: throughput +16.9%이나 p99.9 +76.2%.
+  - Sustained: throughput 차이 +0.6%, p99.9 13.6배, erase 3.43배.
+- Policy:
+  - Zipf에서는 Cost-Benefit이 migration page 최소, FIFO가 peak erase 최소.
+  - Hot-cold에서는 FIFO가 throughput/p99/SLC copy/TLC GC copy/peak erase 종합 우위.
+  - Uniform에서는 정책 간 차이가 작아 locality 의존성을 확인.
+
+
+4. 재현 명령
+------------
+
+보고서 Word 재생성:
+
+  python3 report/build_practice2_docx.py
+
+확장 결과/그림 재생성:
+
+  python3 report/make_practice2_extended_figures.py
+  python3 report/make_slc_crossover_figure.py --reps 1
+
+서버 실험의 공통 원칙:
+
+  umount -> rmmod -> insmod -> mkfs -> mount -> counter reset -> fio
+
+정책 또는 ratio를 바꿀 때 모듈을 완전히 다시 적재해야 이전 FTL의 line/mapping/
+write-pointer 상태가 다음 run에 섞이지 않는다.

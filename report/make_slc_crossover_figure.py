@@ -97,6 +97,7 @@ def load_run(run_dir: Path) -> dict[str, int | float | str]:
         "iops": float(write.get("iops", 0)),
         "avg_us": float(write["lat_ns"]["mean"]) / 1000,
         "p99_us": float(write["clat_ns"]["percentile"]["99.000000"]) / 1000,
+        "p999_us": float(write["clat_ns"]["percentile"]["99.900000"]) / 1000,
         "slc_migrate_pages": slc_pages,
         "migration_percent": 100 * slc_pages / (written_gib * PAGES_PER_GIB_4K),
         "tlc_gc_pages": float(summary.get("tlc_gc_migrate_pages", "0")),
@@ -128,7 +129,15 @@ def aggregate(rows: list[dict[str, int | float | str]]) -> list[dict[str, int | 
     for row in rows:
         groups[(str(row["variant"]), int(row["ratio"]))].append(row)
 
-    metrics = ("written_gib", "bw_mib", "iops", "avg_us", "p99_us", "migration_percent")
+    metrics = (
+        "written_gib",
+        "bw_mib",
+        "iops",
+        "avg_us",
+        "p99_us",
+        "p999_us",
+        "migration_percent",
+    )
     output: list[dict[str, int | float | str]] = []
     for variant in VARIANTS:
         for ratio in (0, 10):
@@ -152,7 +161,9 @@ def write_csv(rows: list[dict[str, int | float | str]], path: Path) -> None:
     if not rows:
         return
     with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+        writer = csv.DictWriter(
+            handle, fieldnames=list(rows[0].keys()), lineterminator="\n"
+        )
         writer.writeheader()
         writer.writerows(rows)
 
@@ -180,7 +191,7 @@ def plot(rows: list[dict[str, int | float | str]]) -> None:
 
     panels = (
         ("bw_mib", "Write throughput", "MiB/s"),
-        ("p99_us", "Host write p99 latency", "µs"),
+        ("p999_us", "Host write p99.9 latency", "µs"),
         ("migration_percent", "SLC→TLC copied pages", "% of host-written pages"),
     )
     for axis, (metric, title, ylabel) in zip(axes, panels):
@@ -204,11 +215,28 @@ def plot(rows: list[dict[str, int | float | str]]) -> None:
         axis.grid(axis="y", color="#e5e9f0", linewidth=0.8)
         axis.set_axisbelow(True)
 
-    axes[0].legend(frameon=False, loc="best")
-    fig.suptitle("SLC cache crossover: benefit before saturation, migration cost after saturation", fontweight="bold")
-    fig.tight_layout()
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.tight_layout(rect=(0, 0, 1, 0.80))
+    title_artist = fig.suptitle(
+        "SLC cache crossover: benefit before saturation, migration cost after saturation",
+        fontweight="bold",
+        y=0.97,
+    )
+    legend_artist = fig.legend(
+        handles,
+        labels,
+        frameon=False,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.88),
+        ncol=2,
+    )
     FIGURE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURE_PATH, dpi=180, bbox_inches="tight")
+    fig.savefig(
+        FIGURE_PATH,
+        dpi=180,
+        bbox_inches="tight",
+        bbox_extra_artists=(title_artist, legend_artist),
+    )
     plt.close(fig)
 
 
@@ -244,12 +272,12 @@ def main() -> int:
     if not missing:
         plot(aggregate_rows)
 
-    print("variant,ratio,n,bw_mib_mean,bw_mib_std,p99_us_mean,p99_us_std,migration_percent_mean")
+    print("variant,ratio,n,bw_mib_mean,bw_mib_std,p999_us_mean,p999_us_std,migration_percent_mean")
     for row in aggregate_rows:
         print(
             f"{row['variant']},{row['ratio']},{row['n']},"
             f"{float(row['bw_mib_mean']):.3f},{float(row['bw_mib_std']):.3f},"
-            f"{float(row['p99_us_mean']):.3f},{float(row['p99_us_std']):.3f},"
+            f"{float(row['p999_us_mean']):.3f},{float(row['p999_us_std']):.3f},"
             f"{float(row['migration_percent_mean']):.3f}"
         )
     print(f"Wrote {OUTPUT_DIR.relative_to(REPO_ROOT)}")

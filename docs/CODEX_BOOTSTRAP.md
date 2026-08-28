@@ -13,8 +13,7 @@
 
 - 권장 실습1 기준 commit: `ae28ab11cd11769358c0bc578ee65f055b28c5a9`
 - 현재 작업 branch: `practice2-slc-cache`
-- 현재 worktree HEAD는 `09f41ac` (`Add SLC validation workflow and runtime ratio control`)다.
-- 원격 `origin/practice2-slc-cache`도 `09f41ac`와 일치한다.
+- 현재 worktree HEAD는 `1898ac6` (`Add greedy SLC crossover rep1 results`)다.
 - 서버 형제 저장소 `~/nvmevirt`는 아직 `9eb9f0b` 기준 `nvmev.ko`만 남아 있어, 현재 검증/실험에는 재빌드가 필요하다.
 - 현재 worktree에는 `conv_ftl.c`, `conv_ftl.h` 중심의 guarded reclaim/write-credit WIP가 있다.
 
@@ -56,18 +55,21 @@
 - 2026-08-28 확장 실험 60개는 `60/60`, fio 오류 0, 조건 누락 0으로 완료됐다.
 - 같은 날 SLC가 유리한 resident 구간과 migration으로 불리해지는 구간을 함께 측정하는
   18-run crossover 실험 스크립트와 전용 집계기를 추가했다.
+- 시간 제약에 따라 crossover는 3회 반복 대신 resident/overflow/sustained × ratio 0/10의 6개 rep1으로 완료했다.
+- Crossover tail 분석 지표는 p99에서 p99.9로 변경했다. Resident에서는 SLC가 유리하고, overflow부터 p99.9가 역전되며, sustained에서는 throughput 이점이 사라지고 p99.9와 erase cost가 크게 증가했다.
+- 확장 결과 CSV/그림 4개와 crossover CSV/그림 1개를 생성했으며, 전체 결과를 `report/REPORT.md`에 반영했다.
 
 ## 아직 안 된 것
 
 - `SLC_CACHE_RATIO_PERCENT` 기본값은 현재 `10`이다.
 - 서버 `baseline` / `SLC-only` / `overflow` / `zipf_nrm` / `hotcold` 결과와 보고서 전체 초안은 정리됐다.
 - 전체 원고에 대한 사용자 검토와 수정, 스타일 적용 DOCX 및 최종 PDF 생성이 남아 있다.
-- Crossover용 새 module parameter가 들어갔으므로 서버에서 재빌드 후 18-run 실험이 필요하다.
+- Crossover 서버 실행과 결과 집계는 완료됐다.
 - 현재 Codex 서버 세션에서는 `sudo`, `lsblk`, `/proc`, `/sys` 접근이 막혀 있어 모듈 로드와 실험 실행을 직접 수행할 수 없다.
 
 ## 보고서 진행 방식
 
-- 원고 파일은 `report/PRACTICE2_REPORT_DRAFT.md`다.
+- 원고 파일은 `report/REPORT.md`다. 현재 브랜치의 GitHub 보고서와 Word 생성기의 단일 원본으로 사용한다.
 - 목차는 `실습 목표 -> 구현 내용 -> 실험 방법 -> 실험 결과 -> 분석 -> 결론`으로 확정했다.
 - 결과는 `Baseline -> SLC-only -> Overflow -> Zipf -> Hot-cold` 순서로 하나씩 작성하고, 각 항목의 표/그래프/본문을 사용자에게 컨펌받은 뒤 다음으로 넘어간다.
 - Markdown은 내용 원본이며, 검토본은 스타일 적용 DOCX, 제출본은 PDF로 만든다.
@@ -92,14 +94,13 @@
 - 실행 방법과 매트릭스는 `docs/PRACTICE2_EXTENDED_EXPERIMENTS.md`에 정리했다.
 - 확장 실험 raw 결과 snapshot은 원격 commit `eeee1c9`까지 반영돼 있다.
 - Crossover 실행 중에는 source/workload 파일을 수정하지 않고 결과 조건을 고정한다.
-- 확장 실험 60개 raw 결과는 완료됐지만, CSV/그래프 생성과 보고서 반영은 아직 남아 있다.
+- 확장 실험 60개와 crossover 6개의 CSV/그래프 생성 및 보고서 반영을 완료했다.
 - Crossover 실행법은 `docs/PRACTICE2_SLC_CROSSOVER_EXPERIMENT.md`에 정리했다.
 
 ## 다음 우선순위
 
-1. 일반 서버 shell에서 재빌드 후 SLC crossover 18개 실험을 실행한다.
-2. 기존 60-run과 crossover 집계/그래프를 생성해 보고서에 반영한다.
-3. 전체 원고 검토 후 스타일 적용 DOCX와 최종 PDF를 만든다.
+1. 전체 원고와 새 그래프를 사용자와 최종 검토한다.
+2. 스타일 적용 DOCX와 최종 PDF를 만든다.
 
 ## 작업 시 주의사항
 

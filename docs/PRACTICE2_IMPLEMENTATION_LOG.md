@@ -715,3 +715,74 @@
 - Python 집계기 `--help` import/구문 확인 통과.
 - 결과가 없는 현재 상태에서 strict 집계기가 누락 18개와 종료 코드 2를 반환하는 것을 확인했다.
 - 현재 Codex 셸은 WSL2 커널 header 경로가 없어 모듈 빌드는 수행하지 못했다. 서버에서 재빌드가 필요하다.
+
+## 2026-08-28: 확장 결과 집계와 p99.9 crossover 보고서 반영
+
+### 변경한 내용
+
+- 서버에서 완료한 확장 실험 60개와 crossover rep1 6개를 검증하고 집계했다.
+- `report/make_slc_crossover_figure.py`
+  - fio의 `99.900000` percentile을 읽어 p99.9를 raw/aggregate CSV와 그래프에 사용하도록 변경했다.
+- `report/make_practice2_extended_figures.py`
+  - ratio 민감도 그림의 무의미한 TLC GC 0 패널을 erase/GiB 패널로 교체했다.
+- `report/REPORT.md`
+  - ratio 0/5/10/20 민감도, Zipf/Hot-cold/Uniform 3회 반복, crossover 결과를 새 표와 그림으로 반영했다.
+  - 기본 확장 실험(`early_completion=1`, `iodepth=16`)과 crossover(`early_completion=0`, `iodepth=1`)의 절대 성능을 직접 비교하지 않도록 실험 방법과 한계를 명시했다.
+
+### 핵심 결과
+
+- Resident 1 GiB: SLC throughput +23.5%, p99.9 -44.3%, migration 0%.
+- Overflow 6 GiB: SLC throughput +16.9%이나 p99.9 +76.2%, migration/host write 20.1%.
+- Sustained 66 GiB: throughput +0.6%로 사실상 동일, p99.9 13.6배, erase 합계 3.43배.
+- Zipf 3회 반복: Cost-Benefit이 migrated pages/GiB 최소, FIFO가 peak erase 최소.
+- Hot-cold 3회 반복: FIFO가 throughput, p99, SLC/TLC copy cost, erase 지표에서 종합 우위.
+- Uniform: 정책 간 throughput 및 SLC copy 차이가 각각 1.46%, 1.58%로 작아 locality 의존성을 확인했다.
+
+### 생성물
+
+- `report/extended_results/practice2_extended_raw.csv`
+- `report/extended_results/practice2_extended_aggregate.csv`
+- `report/crossover_results/slc_crossover_raw.csv`
+- `report/crossover_results/slc_crossover_aggregate.csv`
+- `report/figures/practice2_ext_fig1_ratio_sensitivity.png`부터 `practice2_ext_fig5_slc_crossover.png`
+
+## 2026-08-28: 제출용 Word 초안 생성
+
+- `report/build_practice2_docx.py`를 추가했다.
+- Markdown 원고의 초안 상태 문구를 제외하고 heading level을 Word 목차 구조에 맞춰 변환한다.
+- Pandoc DOCX에 A4/25 mm 여백, 표지와 목차 분리, Heading 1 새 페이지, 한글/영문 글꼴, 페이지 번호, 목차 자동 갱신, 그림 폭 제한, 표 자동 맞춤과 첫 행 반복을 후처리한다.
+- 생성 파일: `report/PRACTICE2_REPORT.docx`
+- 구조 검증: DOCX ZIP 오류 없음, 그림 8개, 표 17개, 반복 머리행 17개, footer 및 updateFields 설정 확인.
+- 재생성 명령: `python3 report/build_practice2_docx.py`
+
+## 2026-08-28: GitHub 렌더링용 REPORT.md 정리
+
+- `practice2-slc-cache` 브랜치의 기존 `report/REPORT.md`를 실습 2 최종 원고로 교체했다.
+- `report/figures/*.png` 상대경로를 사용하므로 브랜치 push 후 GitHub에서 표와 그래프가 본문 안에 바로 표시된다.
+- Word 파일 링크를 원고 상단에 추가하고 `build_practice2_docx.py`도 `report/REPORT.md`를 단일 원본으로 사용하도록 변경했다.
+
+## 2026-08-28: 보고서 가독성 중심 압축
+
+- 원고를 428줄/5,217단어에서 191줄/1,851단어로 줄였다.
+- 초기 baseline/SLC-only/overflow 그래프 3개는 핵심 counter 표 하나로 통합하고, ratio/crossover/Zipf/Hot-cold/workload sensitivity의 핵심 그림 5개만 유지했다.
+- 구현 절은 구조·migration 정책·검증의 3개 절로, 실험 방법은 환경·실험 구성의 2개 절로 합쳤다.
+- 결과에서 이미 설명한 내용을 분석과 결론에서 반복하지 않고, 운영 구간·locality·write amplification의 핵심 해석만 남겼다.
+- Word를 재생성해 그림 5개, 표 9개, 반복 머리행 9개와 목차/페이지 번호 설정을 검증했다.
+
+## 2026-08-28: 제출용 코드 구조 안내
+
+- `Code_Structure_Notice.txt`에 Practice 1 기준선 대비 핵심 변경 파일과 주요 함수, 실험/분석 파일, 검증 결과를 정리했다.
+- 핵심 구현 파일은 `conv_ftl.c`, `conv_ftl.h`, `ssd.c`, `ssd.h`, `ssd_config.h`이며 계측/안정성 파일 `main.c`, `io.c`도 첨부 대상으로 분류했다.
+- Word와 위 7개 코드를 개별 첨부할 수 있도록 필수/선택 파일을 구분했다.
+
+## 2026-08-28: Workload 설명 보강
+
+- 압축 보고서의 실험 방법에 workload별 접근 패턴, 크기/반복, 확인 목적을 정리한 표를 추가했다.
+- Uniform/Zipf 통제 조건, `norandommap`, Hot-cold 동시 실행, crossover의 low-queue/early-completion 조건이 왜 필요한지 설명했다.
+
+## 2026-08-28: 4장 결과 그래프 8개 복원
+
+- 압축 과정에서 제외했던 Baseline, SLC-only, Overflow 그래프를 4장에 다시 추가했다.
+- 최신 ratio/crossover/Zipf repeat/Hot-cold repeat/workload sensitivity 5개와 합쳐 총 8개를 사용한다.
+- 이전 single-run Zipf/Hot-cold 그래프 2개는 최신 3회 반복 그림과 중복되고 binary 기준이 달라 제외했다.
+- Word 재생성 검증: 그림 8개, 표 11개, 반복 머리행 11개.

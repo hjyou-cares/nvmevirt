@@ -1,0 +1,7 @@
+run_dir,variant,rep,ratio,written_gib,bw_mib,iops,avg_us,p99_us,p999_us,slc_migrate_pages,migration_percent,tlc_gc_pages,erase_sum
+results/20260828_173841_slcpolicy0_greedy_slc_crossover_resident_ratio0_rep1,resident,1,0,1.0,96.9873046875,24828.944876,40.093768978,234.496,468.992,0.0,0.0,0.0,0.0
+results/20260828_173853_slcpolicy0_greedy_slc_crossover_resident_ratio10_rep1,resident,1,10,1.0,119.8076171875,30670.878671,32.406612366000004,92.672,261.12,0.0,0.0,0.0,0.0
+results/20260828_173903_slcpolicy0_greedy_slc_crossover_overflow_ratio0_rep1,overflow,1,0,6.0,97.4248046875,24940.758594,39.906853539000004,234.496,240.64,0.0,0.0,0.0,0.0
+results/20260828_174007_slcpolicy0_greedy_slc_crossover_overflow_ratio10_rep1,overflow,1,10,6.0,113.931640625,29166.539952,34.10252386,91.648,423.936,316029.0,20.09258270263672,0.0,6324.0
+results/20260828_174103_slcpolicy0_greedy_slc_crossover_sustained_ratio0_rep1,sustained,1,0,66.0,100.8623046875,25820.866521,38.550871313,234.496,234.496,0.0,0.0,0.0,58296.0
+results/20260828_175214_slcpolicy0_greedy_slc_crossover_sustained_ratio10_rep1,sustained,1,10,66.0,101.486328125,25980.652854,38.316628993,90.624,3194.88,13580813.0,78.49498517585523,0.0,199720.0

@@ -278,7 +278,7 @@ def write_raw_csv(rows: list[dict[str, float | int | str]], path: Path) -> None:
         "run_dir",
     ]
     with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer = csv.DictWriter(handle, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -318,7 +318,7 @@ def write_aggregate_csv(rows: list[dict[str, float | int | str]], path: Path) ->
     for metric in METRICS:
         fields.extend([f"{metric}_mean", f"{metric}_std"])
     with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer = csv.DictWriter(handle, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -362,7 +362,7 @@ def plot_ratio_sweep(rows: list[dict[str, float | int | str]], figure_dir: Path)
         ("bw_mib", "Write throughput", "Higher is better · MiB/s"),
         ("p99_us", "p99 write latency", "Lower is better · microseconds"),
         ("slc_pages_per_gib", "SLC migration cost", "Valid pages copied per written GiB"),
-        ("tlc_gc_pages_per_gib", "Downstream TLC GC cost", "Valid pages copied per written GiB"),
+        ("erase_per_gib", "Erase cost", "Block erases per written GiB"),
     ]
     fig, axes = plt.subplots(2, 2, figsize=(11.6, 7.7))
     fig.subplots_adjust(left=0.075, right=0.97, top=0.84, bottom=0.11, wspace=0.28, hspace=0.45)

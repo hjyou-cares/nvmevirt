@@ -77,6 +77,7 @@ python3 report/make_slc_crossover_figure.py
 
 ## 해석 기준
 
-- Resident에서 SLC의 throughput이 높고 평균/p99 latency가 낮아야 SLC media 이득을 주장할 수 있다.
-- Overflow와 Sustained에서는 migrated page 비율 증가와 함께 성능이 역전되는지 본다.
+- Resident에서 SLC의 throughput이 높고 평균/p99.9 latency가 낮아야 SLC media 이득을 주장할 수 있다.
+- Overflow와 Sustained에서는 migrated page 비율 증가와 함께 p99.9 tail latency가 역전되는지 본다.
+- Migration은 전체 request의 1%보다 드물 수 있으므로 crossover 그림의 tail 지표는 p99가 아니라 p99.9를 사용한다.
 - 결과가 예상과 다르면 유리하다고 단정하지 않고 실제 평균과 표준편차를 그대로 보고한다.
